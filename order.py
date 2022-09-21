@@ -25,6 +25,7 @@ import os
 import re
 import copy
 import csv
+import shutil
 from urllib import request, parse
 from selenium import webdriver
 from selenium.webdriver.support.wait import WebDriverWait
@@ -33,18 +34,34 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
 
 # INPUTS
-apkg_name = "test3"
-identifiers = {"Basic-2d749": "Name"}
-#identifiers = {"UK Geog-57440": "Location", "Basic" : "Front", } # model name -> ident field
+identifiers = ""
+"""
+`identifiers` is a dictionary {model name: list of ident field names
+in order of check priority} and should really be called
+`ident_fields_names_in_model_name`
+"""
+if False:
+    apkg_path = "test3"
+    identifiers = {"Basic-2d749": ["Name",]}
+if False:
+    identifiers = {"UK Geog-57440": ["Location"], "Basic" : ["Front"], }
+if True:
+    apkg_path = "/home/eliclax/Documents/knowledge/anki/us-pres/US-Presidents"
+    identifiers = {"US-Presidents": ["Name", "Real name"]}
 start_date = "20150701"
 end_date = "20220901"
 get_wiki_pv = True
 get_google_hits = False
 max_rows = -1
+verbosity_input = 10
 
 # GLOBAL VARS
-field_of_model = {} # model -> ident field
-notes = [] # List of {note id, ident, fame} dicts
+ident_fields_of_model = {} # model -> ident field
+notes = []
+"""
+List of {"nid": note_id, "ident": ident_name, "fame": ...} dicts
+"""
+anki2 = ""
 
 # FUNCTIONS
 def get_pageviews(url_bit = ""):
@@ -58,10 +75,10 @@ def get_pageviews(url_bit = ""):
     #print(total_views)
     return pageviews
 
-def go_get_wiki_pv(max = max_rows, verbose = False):
-    if verbose:
+def go_get_wiki_pv(max = max_rows, verbosity = 0):
+    if verbosity >= 10:
         print("WIKIPEDIA PAGEVIEWS")
-        print("  No   URL bit           Pageviews")
+        print("  No   URL bit                    Pageviews")
     for i in range(max):
         # SEE https://stackoverflow.com/questions/27457977/searching-wikipedia-using-api
         wiki_search_url = "https://en.wikipedia.org/w/api.php?action=opensearch&search="
@@ -76,13 +93,13 @@ def go_get_wiki_pv(max = max_rows, verbose = False):
 
         # Determine Wikipedia page views from start_date to end_date
         notes[i]["pageviews"] = get_pageviews(url_bit)
-        if verbose:
-            print('{:4d}'.format(i) + ":  " + '{:18.15}'.format(notes[i]["url_bit"]) + '{:>11.11}'.format(str(notes[i]["pageviews"])))
+        if verbosity >= 10:
+            print('{:4d}'.format(i) + ":  " + '{:25.22}'.format(notes[i]["url_bit"]) + '{:>11.11}'.format(str(notes[i]["pageviews"])))
 
-def go_get_google_hits(max = max_rows, verbose = False):
-    if verbose:
+def go_get_google_hits(max = max_rows, verbosity = 0):
+    if verbosity >= 10:
         print("GOOGLE HITS")
-        print("  No   URL bit           Google hits")
+        print("  No   URL bit                        Google hits")
     caps = DesiredCapabilities().FIREFOX
     caps["pageLoadStrategy"] = "none"  #  interactive
     driver = webdriver.Firefox(capabilities=caps)
@@ -104,61 +121,93 @@ def go_get_google_hits(max = max_rows, verbose = False):
             notes[i]["googlehits"] = int(hits)
         else:
             notes[i]["googlehits"] = -1
-        if verbose:
-            print('{:4d}'.format(i) + ":  " + '{:18.15}'.format(notes[i]["ident"].replace(" ","+")) + '{:>11.11}'.format(str(notes[i]["googlehits"])))
+        if verbosity >= 10:
+            print('{:4d}'.format(i) + ":  " + '{:25.22}'.format(notes[i]["ident"].replace(" ","+")) + '{:>11.11}'.format(str(notes[i]["googlehits"])))
 
-def get_database():
-    archive = zipfile.ZipFile(apkg_name + ".apkg", 'r')
-    col = archive.read('collection.anki2')
-    with open(apkg_name + ".db","wb") as de:
-        de.write(col)
+def extract():
+    with zipfile.ZipFile(apkg_path + "_ordered.apkg", 'r') as zip:
+        zip.extractall(apkg_path + "_ordering/unzipped/")
+
+def load_model(model_key = ""):
+    """
+    Loads model as list of dicts, each dict
+    is {"nid": note_id, "flds": {note data as a dict}}
+
+    :param model_key: The model_key for the model
+    :return: List of dicts
+    """
+
+    with sqlite3.connect(apkg_path + "_ordering/unzipped/collection.anki2") as con1:
+        cur1 = con1.cursor()
+        model = json.loads(cur1.execute("SELECT models FROM col").fetchone()[0])[model_key]
+        res = cur1.execute("SELECT id, flds FROM notes WHERE mid=(?)", (model_key,)).fetchall()
+        lis = []
+        for entry in res:
+            flds = {}
+            flds_values = entry[1].split("\x1f")
+            for i in range(len(flds_values)):
+                flds[model["flds"][i]["name"]] = flds_values[i]
+            lis.append({"nid": entry[0], "flds": flds})
+    return lis
 
 def get_idents_from_db():
-    # Build "field_of_model" (model -> ident field)
-    res = cur.execute("SELECT models FROM col").fetchone()[0]
-    models = json.loads(res)
+    # Build "ident_fields_of_model" dict {model key: list of ident field names}
+    models = json.loads(cur.execute("SELECT models FROM col").fetchone()[0])
     for ident_key in identifiers.keys():
         model_found = False
         for model_key in models.keys():
             if models[model_key]["name"] == ident_key:
                 model_found = True
-                field_of_model[model_key] = identifiers[ident_key]
+                ident_fields_of_model[model_key] = identifiers[ident_key]
         if not model_found:
             msg = "ERROR: Model name \"" + ident_key + "\" not found.  Model names: ["
             for key in models.keys():
                 msg += models[key]["name"] + ", "
             print(msg + "]")
             exit()
-    #print(field_of_model)
 
-    # Build "notes" (List of {note id, ident, fame} dicts) from notes in each model
-    for model_key in field_of_model.keys():
+    # Check field names can be found in respective models
+    for model_key in ident_fields_of_model.keys():
+        for field in ident_fields_of_model[model_key]:
+            field_no = 0
+            flds = models[model_key]["flds"]
+            while flds[field_no]["name"] != field:
+                field_no += 1
+                if field_no >= len(flds):
+                    msg = "ERROR: Ident field \"" + field + "\" not found in "
+                    msg += "fields of model \"" + models[model_key]["name"]
+                    msg += "\" (" + model_key + ") = ["
+                    for i in range(len(flds)):
+                        msg += flds[i]["name"] + ", "
+                    print(msg + "]")
+                    exit()
 
-        # Find field number in model
-        field_no = 0
-        flds = models[model_key]["flds"]
-        while flds[field_no]["name"] != field_of_model[model_key]:
-            field_no += 1
-            # If field_name not found, return error and exit
-            if field_no >= len(flds):
-                msg = "ERROR: Ident field \"" + field_of_model[model_key] + "\" not found in "
-                msg += "fields of model \"" + models[model_key]["name"] + "\" (" + model_key + ") = ["
-                for i in range(len(flds)):
-                    msg += flds[i]["name"] + ", "
-                print(msg + "]")
-                exit()
-        
-        res = cur.execute("SELECT id, flds FROM notes WHERE mid=(?)", (model_key,))
-        #print(res.fetchall())
-        for entry in res.fetchall():
-            ident = entry[1].split("\x1f")[field_no].replace('<br>','').replace('<br/>','').replace('<br />','')
-            notes.append({"nid": entry[0], "ident" : ident})
+    # Build "notes" (List of {note id: X, ident: X} dicts) from notes in each model
+    notes_of_model = {}
+    for model_key in ident_fields_of_model.keys():
+        notes_of_model[model_key] = load_model(model_key)
+
+    for model_key in ident_fields_of_model.keys():
+        for note in notes_of_model[model_key]:
+            ident = ""
+            for i in range(len(ident_fields_of_model[model_key])):
+                if note["flds"][ident_fields_of_model[model_key][i]] != "":
+                    ident = note["flds"][ident_fields_of_model[model_key][i]]
+                    break
+                if i == len(ident_fields_of_model[model_key]) - 1:
+                    print("warn1: some ident name is empty string")
+            notes.append({"nid": note["nid"], "ident": ident})
+
+        # for entry in res.fetchall():
+        #     ident = entry[1].split("\x1f")[field_no].replace('<br>','').replace('<br/>','').replace('<br />','')
+        #     notes.append({"nid": entry[0], "ident" : ident})
     
-    # for i in range(len(notes)):
-    #     print('{:4d}'.format(i) + ": " + str(notes[i]))
+    if verbosity_input >= 20:
+        for i in range(len(notes)):
+            print('{:4d}'.format(i) + ": " + str(notes[i]))
 
 def write_scout_to_csv(max = max_rows):
-    with open(apkg_name + ".csv","w",newline='') as csvfile:
+    with open(apkg_path + "_ordering/ordering.csv","w",newline='') as csvfile:
         csvwriter = csv.writer(csvfile, delimiter='\t', quotechar='"', quoting=csv.QUOTE_MINIMAL)
         row = ["id","nid","pageviews","googlehits","ident","using",0,1,2,3,4,5,6,7,8,9]
         csvwriter.writerow(row)
@@ -180,9 +229,11 @@ def write_scout_to_csv(max = max_rows):
             csvwriter.writerow(row)
 
 # START OF PROGRAM
-get_database() # Get database from .apkg file
 
-with sqlite3.connect(apkg_name + ".db") as con:
+shutil.copy(apkg_path + ".apkg", apkg_path + "_ordered.apkg")
+extract() # Extract APKG_PATH.apkg to folder APKG_PATH/../de/APKG_PATH_ordered/
+
+with sqlite3.connect(apkg_path + "_ordering/unzipped/collection.anki2") as con:
     cur = con.cursor()
     get_idents_from_db() # Obtain idents from "notes" DB table
 
@@ -190,14 +241,14 @@ with sqlite3.connect(apkg_name + ".db") as con:
         max_rows = len(notes)
 
     if get_wiki_pv:
-        go_get_wiki_pv(max_rows, verbose = True)
+        go_get_wiki_pv(max_rows, verbosity = verbosity_input)
 
     if get_google_hits:
-        go_get_google_hits(max_rows, verbose = True)
+        go_get_google_hits(max_rows, verbosity = verbosity_input)
 
     write_scout_to_csv(max_rows)
-    os.system("libreoffice --calc \"" + apkg_name + ".csv\"")
-    with open(apkg_name + ".csv", newline='') as csvfile:
+    os.system("libreoffice --calc \"" + apkg_path + "_ordering/ordering.csv\"")
+    with open(apkg_path + "_ordering/ordering.csv", newline='') as csvfile:
         csvreader = csv.reader(csvfile, delimiter="\t", quotechar='"')
         for row in csvreader:
             #print(row)
@@ -224,9 +275,10 @@ with sqlite3.connect(apkg_name + ".db") as con:
     sorted_notes = sorted(notes, key=lambda d: -d["pageviews"])
     for i in range(len(sorted_notes)):
         cur.execute("UPDATE cards SET due=(?) WHERE nid=(?)", (i, sorted_notes[i]["nid"]))
-
-
 con.close()
 
-#os.remove(apkg_name + ".db")
+shutil.make_archive(apkg_path + "_ordered", 'zip', apkg_path + "_ordering/unzipped/")
+os.rename(apkg_path + "_ordered.zip", apkg_path + "_ordered.apkg")
+
+#os.remove(apkg_path + "_ordered.db")
 print("\nDone")
