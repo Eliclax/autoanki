@@ -18,6 +18,7 @@
 # Ident = Name of the "thing" to be searched on Wikipedia/Google
 
 # IMPORTS
+from argparse import ArgumentParser
 import sqlite3
 import zipfile
 import json
@@ -34,20 +35,25 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
 
 # INPUTS
+apkg_path = ""
+"""
+absolute path to .apkg file, including ".apkg".  ".colpkg" not yet supported.
+"""
+
 identifiers = ""
 """
-`identifiers` is a dictionary {model name: list of ident field names
-in order of check priority} and should really be called
-`ident_fields_names_in_model_name`
+`identifiers` is a dictionary {model name: list of ident field names in order of 
+check priority} and should really be called `ident_fields_names_in_model_name`
 """
-if False:
-    apkg_path = "test3"
-    identifiers = {"Basic-2d749": ["Name",]}
-if False:
-    identifiers = {"UK Geog-57440": ["Location"], "Basic" : ["Front"], }
-if True:
-    apkg_path = "/home/eliclax/Documents/knowledge/anki/us-pres/US-Presidents"
-    identifiers = {"US-Presidents": ["Name", "Real name"]}
+
+# apkg_path = "test3.apkg"
+# identifiers = {"Basic-2d749": ["Name",]}
+
+# identifiers = {"UK Geog-57440": ["Location"], "Basic" : ["Front"], }
+
+# apkg_path = "/home/eliclax/Documents/knowledge/anki/us-pres/US-Presidents.apkg"
+# identifiers = {"US-Presidents": ["Name", "Real name"]}
+
 start_date = "20150701"
 end_date = "20220901"
 get_wiki_pv = True
@@ -61,9 +67,49 @@ notes = []
 """
 List of {"nid": note_id, "ident": ident_name, "fame": ...} dicts
 """
-anki2 = ""
 
 # FUNCTIONS
+def parse_inputs():
+    parser = ArgumentParser(description=
+    """This program reorders the notes in an Anki deck by how well-known each note is.  It
+    does this via checking Wikipedia article pageviews and/or Google search hits.  You need
+    to tell this program which field of each note its "name" is in, as a JSON string (see -h for more).
+    Note that determining the correct Wikipedia article and finding a representative Google
+    search query can be quite difficult.""")
+    parser.add_argument("-s", "--start", dest="start_date", default="20150701",
+                        help="the starting date for wikipedia view data. format YYYYMMDD")
+    parser.add_argument("-e", "--end", dest="end_date", default="20220901",
+                        help="the ending date for wikipedia view data. format YYYYMMDD")
+    parser.add_argument("-v", "--verbosity", dest="verbosity_input", default=10,
+                        help="set output verbosity. 0 is silent, 10 is default, 100 is max.")
+    parser.add_argument("-m", "--max", dest="max_rows", default=-1,
+                        help="set max number of rows. -1 means no limit. useful when debugging.")
+
+    parser.add_argument("path", help="path to the .apkg file")
+    parser.add_argument("identifiers", help=
+    """Input a JSON string indicating, for each note type, a list of fields to grab the identity from.  For example,
+    a deck about US History might contain a note type for Presidents and a note type for Periods.  If you want
+    to use the "name" field for both note types, then input
+        {"Presidents": ["Name"], "Periods": ["Name"]}.
+    However, suppose that the note on George Washington has {"Name": "", "Real name": "George Washintgon"} and the 
+    note on Bill Clinton has {"Name": "Bill Clinton", "Real name": "William J. Clinton"} then neither
+        {"Presidents": ["Name"], "Periods": ["Name"]}   nor   {"Presidents": ["Real Name"], "Periods": ["Name"]}
+    will correctly get the desired information.  In this case, use 
+        {"Presidents": ["Name", "Real name"], "Periods": ["Name"]}.
+    This program will attempt to grab the "Name" for George Washington, but since it is empty, it
+    will try grabbing the "Real name" field.  The program will keep going down the list of fields
+    until a non-empty field is found for that note.""")
+
+    args = parser.parse_args()
+
+    global apkg_path, identifiers, start_date, end_date, verbosity_input, max_rows
+    apkg_path = args.path
+    identifiers = args.identifiers
+    start_date = args.start_date
+    end_date = args.end_date
+    verbosity_input = args.verbosity_input
+    max_rows = args.max_rows
+
 def get_pageviews(url_bit = ""):
     pageviews = 0
     wiki_url = "https://wikimedia.org/api/rest_v1/metrics/pageviews/per-article/en.wikipedia.org"
@@ -77,7 +123,8 @@ def get_pageviews(url_bit = ""):
 
 def go_get_wiki_pv(max = max_rows, verbosity = 0):
     if verbosity >= 10:
-        print("WIKIPEDIA PAGEVIEWS")
+        print()
+        print("GETTING WIKIPEDIA PAGEVIEWS...")
         print("  No   URL bit                    Pageviews")
     for i in range(max):
         # SEE https://stackoverflow.com/questions/27457977/searching-wikipedia-using-api
@@ -95,6 +142,31 @@ def go_get_wiki_pv(max = max_rows, verbosity = 0):
         notes[i]["pageviews"] = get_pageviews(url_bit)
         if verbosity >= 10:
             print('{:4d}'.format(i) + ":  " + '{:25.22}'.format(notes[i]["url_bit"]) + '{:>11.11}'.format(str(notes[i]["pageviews"])))
+
+def re_get_wiki_pv(max = max_rows, verbosity = 0):
+    with open(apkg_path + "_ordering/ordering.csv", newline='') as csvfile:
+        csvreader = csv.reader(csvfile, delimiter="\t", quotechar='"')
+        for row in csvreader:
+            #print(row)
+            if row[5] == "using":
+                continue
+            id = int(row[0])
+            notes[id]["nid"] = row[1]
+            notes[id]["ident"] = row[4]
+            notes[id]["url_bit"] = row[6]
+            if row[2] != '':
+                notes[id]["pageviews"] = int(row[2])
+            # if row[3] != '':
+            #     notes[id]["googlehits"] = int(row[3])
+            if int(row[5]) != 0:
+                old_url = str(row[6])
+                new_url = str(row[6+int(row[5])])
+                msg = '{:18.15}'.format(notes[id]["ident"]) + " pv " + str(row[2])
+                msg += " (" + old_url + ") -> "
+                notes[id]["pageviews"] = get_pageviews(new_url)
+                msg += str(notes[id]["pageviews"]) + " (" + new_url + ")"
+                notes[id]["url_bit"] = new_url
+                print(msg)
 
 def go_get_google_hits(max = max_rows, verbosity = 0):
     if verbosity >= 10:
@@ -230,6 +302,17 @@ def write_scout_to_csv(max = max_rows):
 
 # START OF PROGRAM
 
+parse_inputs()
+
+# check path is valid
+print(apkg_path)
+if apkg_path[-5:] != ".apkg":
+    print("Invalid file path: does not end with .apkg")
+    exit()
+else:
+    apkg_path = apkg_path[:-5]
+identifiers = json.loads(identifiers)
+
 shutil.copy(apkg_path + ".apkg", apkg_path + "_ordered.apkg")
 extract() # Extract APKG_PATH.apkg to folder APKG_PATH/../de/APKG_PATH_ordered/
 
@@ -248,37 +331,23 @@ with sqlite3.connect(apkg_path + "_ordering/unzipped/collection.anki2") as con:
 
     write_scout_to_csv(max_rows)
     os.system("libreoffice --calc \"" + apkg_path + "_ordering/ordering.csv\"")
-    with open(apkg_path + "_ordering/ordering.csv", newline='') as csvfile:
-        csvreader = csv.reader(csvfile, delimiter="\t", quotechar='"')
-        for row in csvreader:
-            #print(row)
-            if row[5] == "using":
-                continue
-            id = int(row[0])
-            notes[id]["nid"] = row[1]
-            notes[id]["ident"] = row[4]
-            notes[id]["url_bit"] = row[6]
-            if row[2] != '':
-                notes[id]["pageviews"] = int(row[2])
-            if row[3] != '':
-                notes[id]["googlehits"] = int(row[3])
-            if int(row[5]) != 0:
-                old_url = str(row[6])
-                new_url = str(row[6+int(row[5])])
-                msg = '{:18.15}'.format(notes[id]["ident"]) + " pv " + str(row[2])
-                msg += " (" + old_url + ") -> "
-                notes[id]["pageviews"] = get_pageviews(new_url)
-                msg += str(notes[id]["pageviews"]) + " (" + new_url + ")"
-                notes[id]["url_bit"] = new_url
-                print(msg)
 
+    if get_wiki_pv:
+        re_get_wiki_pv(max_rows, verbosity = verbosity_input)
+
+    if get_google_hits:
+        # TO CODE THIS
+        pass
+
+    # Set notes table "due" column
     sorted_notes = sorted(notes, key=lambda d: -d["pageviews"])
     for i in range(len(sorted_notes)):
         cur.execute("UPDATE cards SET due=(?) WHERE nid=(?)", (i, sorted_notes[i]["nid"]))
 con.close()
 
+# Zip apkg_name_ordered/unzipped
 shutil.make_archive(apkg_path + "_ordered", 'zip', apkg_path + "_ordering/unzipped/")
 os.rename(apkg_path + "_ordered.zip", apkg_path + "_ordered.apkg")
 
-#os.remove(apkg_path + "_ordered.db")
-print("\nDone")
+if verbosity_input >= 1:
+    print("\nDone")
