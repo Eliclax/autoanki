@@ -1,10 +1,23 @@
 # STEPS
-# 0. Take inputs                                         __
+# 0. Take inputs                                         ✓
 # 1. Extract <name>s from Anki deck                      ✓
-# 2. Find Wikipedia <url>s for <name>s                   ✓ ?
+# 2. Find Wikipedia <url>s for <name>s                   ✓
 # 3. Query WMF READ DB to get <pageview>s                ✓
-# 4. (Optional) Get the Google <hitCount>s for <name>s   ✓ ?
-# 5. Update Anki deck and zip back into .akpg file       __
+# 4. Get the Google <hitCount>s for <name>s              __
+# 5. Update Anki deck and zip back into .akpg file       ✓
+
+# TO-DO
+# Write Add-on directly into Anki
+# Customisation of "libreoffice --calc" part
+# Implement custom search text specification for Google hits
+# Allow modular usage (start -> end, start -> csv, csv -> end, etc.)
+
+# ADD-ON IDEAS
+# Functions:
+#  • Notes -> add and populate Wikipedia URL field -> add and populate page views field
+#  • Notes -> add and populate Google search term field -> add and populate Google hits field
+#  • CSV, Notes -> Re-order deck according to CSV
+#  • Notes, pageviews and/or google hits fields -> re-order deck
 
 # RESOURCES
 # https://github.com/ankidroid/Anki-Android/wiki/Database-Structure#notes
@@ -110,7 +123,7 @@ def parse_inputs():
     verbosity_input = args.verbosity_input
     max_rows = args.max_rows
 
-def get_pageviews(url_bit = ""):
+def get_pageviews(url_bit: str = ""):
     pageviews = 0
     wiki_url = "https://wikimedia.org/api/rest_v1/metrics/pageviews/per-article/en.wikipedia.org"
     wiki_url += "/all-access/user/" + url_bit + "/monthly/" + start_date + "/" + end_date
@@ -314,7 +327,7 @@ else:
 identifiers = json.loads(identifiers)
 
 shutil.copy(apkg_path + ".apkg", apkg_path + "_ordered.apkg")
-extract() # Extract APKG_PATH.apkg to folder APKG_PATH/../de/APKG_PATH_ordered/
+extract() # Extract APKG_PATH.apkg to folder APKG_PATH_ordering/unzipped/
 
 with sqlite3.connect(apkg_path + "_ordering/unzipped/collection.anki2") as con:
     cur = con.cursor()
@@ -330,7 +343,8 @@ with sqlite3.connect(apkg_path + "_ordering/unzipped/collection.anki2") as con:
         go_get_google_hits(max_rows, verbosity = verbosity_input)
 
     write_scout_to_csv(max_rows)
-    os.system("libreoffice --calc \"" + apkg_path + "_ordering/ordering.csv\"")
+    exec = "libreoffice --calc \"" + apkg_path + "_ordering/ordering.csv\""
+    os.system(exec)
 
     if get_wiki_pv:
         re_get_wiki_pv(max_rows, verbosity = verbosity_input)
