@@ -1,6 +1,7 @@
-from urllib import request, parse
+from urllib import request, parse, error
 import json
 import os
+import requests
 
 # If running this module by itself for dev purposes, you can change the verbosity by changing the "v = 1" line
 verbose: int = 0
@@ -16,8 +17,11 @@ def searchArticleUrl(searchPhrase : str) -> str:
     searchUrl = "https://en.wikipedia.org/w/api.php?action=opensearch&search="
     searchUrl += parse.quote(searchPhrase)
     searchUrl += "&limit=10&namespace=0&format=json"
-    search_result = json.loads(request.urlopen(searchUrl).read())
-    #print(search_result)
+    try:
+        req = request.urlopen(searchUrl)
+    except:
+        raise
+    search_result = json.loads(req.read())
     article = os.path.basename(parse.urlparse(search_result[3][0]).path)
     if verbose >= 1:
         print("   > Searched: {} -> {}".format(searchPhrase, article))
@@ -49,7 +53,11 @@ def getPageviews(
     if article != "":
         wikiUrl = "https://wikimedia.org/api/rest_v1/metrics/pageviews/per-article/"
         wikiUrl += "{}/{}/{}/{}/{}/{}/{}".format(project, access, agent, article, granularity, start, end)
-        contents = json.loads(request.urlopen(wikiUrl).read())
+        try:
+            req = request.urlopen(wikiUrl)
+        except:
+            raise
+        contents = json.loads(req.read())
         if verbose >= 2:
             print(json.dumps(json.loads(contents), indent=4))
         for item in contents["items"]:
