@@ -1,18 +1,13 @@
-# import the main window object (mw) from aqt
-from time import sleep
 from aqt import mw, gui_hooks, AnkiQt
-# import the "show info" tool from utils.py
 from aqt.utils import qconnect, tooltip, showWarning
-
-# import all of the Qt GUI library
 from aqt.qt import *
-import re
-from typing import Sequence, Optional, Union, List
-
 from anki.notes import NoteId, Note
 from anki.models import NotetypeDict, NotetypeId, ModelManager
 from aqt.fields import *
 
+from time import sleep
+import re
+from typing import Sequence, Optional, Union, List
 from . import wiki
 
 class AddFameDialog(QDialog):
@@ -98,7 +93,7 @@ class AddFameDialog(QDialog):
     ### MODIFIED FROM https://github.com/ankitects/anki/blob/d110c4916cf1d83fbeae48ae891515c79a412018/qt/aqt/fields.py#L179
     def accept(self) -> None:
         """
-        When the OK button in the Dialog is clicked, start doing stuff.
+        When the OK button in the Dialog is clicked, start adding the Fame.
         """
 
         self.mm = ModelManager(self.bmw.col)
@@ -168,7 +163,7 @@ class AddFameDialog(QDialog):
         main_vbox = QVBoxLayout()
         if True:
             ivbox = QVBoxLayout()
-            desc_msg = "Add fields containing the number of Wikipedia searches "
+            desc_msg = "Add fields containing the number of Wikipedia pageviews "
             desc_msg+= "for an article (the first that Wikipedia search returns) and/or "
             desc_msg+= "the number of Google hits for a search term.  Note: ensure no field begins with '{'."
             desc = QLabel(desc_msg)
@@ -180,10 +175,10 @@ class AddFameDialog(QDialog):
 
             fDictNo = 2
             self.fDict = [{} for a in range(fDictNo)]
-            self.fDict[0]["gbName"] = "Get Wikipedia searches"
-            self.fDict[1]["gbName"] = "Get Google hits"
-            self.fDict[0]["newFieldPlaceholder"] = "Wiki Fame"
-            self.fDict[1]["newFieldPlaceholder"] = "Google Fame"
+            self.fDict[0]["gbName"] = "Get Wikipedia pageviews"
+            self.fDict[1]["gbName"] = "Get Google hits (in development!)"
+            self.fDict[0]["newFieldPlaceholder"] = "Wiki Pageviews"
+            self.fDict[1]["newFieldPlaceholder"] = "Google Hits"
 
             for i in range(2):
                 fd = self.fDict[i]
