@@ -8,7 +8,9 @@ from aqt.fields import *
 from time import sleep
 import re
 from typing import Sequence, Optional, Union, List
+
 from . import wiki
+from urllib import error
 
 class AddFameDialog(QDialog):
     """
@@ -33,6 +35,13 @@ class AddFameDialog(QDialog):
         self.fields = self.bmw.col.models.fieldNames(self.model)
         self._setupUi()
         self.currentIdx: Optional[int] = None
+
+    def _handleNetworkError(self, err: Exception, msg: str = "") -> None:
+        if isinstance(err, error.HTTPError):
+            txt = str(err.code) + " HTTP ERROR"
+        else:
+            txt = tr.addons_please_check_your_internet_connection() + "\n\nError: " + str(err.reason)
+        showWarning(msg + "\n\n" + txt, textFormat="rich", parent=self)
 
     def _mergeFieldIntoTag(self, mergeString: str, note: Note) -> str:
         """
@@ -67,7 +76,7 @@ class AddFameDialog(QDialog):
 
         return self.bmw.col.models.fieldNames(self.model)
 
-    ### MODIFIED FROM https://github.com/ankitects/anki/blob/d110c4916cf1d83fbeae48ae891515c79a412018/qt/aqt/fields.py#L142
+    # See https://github.com/ankitects/anki/blob/d110c4916cf1d83fbeae48ae891515c79a412018/qt/aqt/fields.py#L142
     def _uniqueName(self, txt: str, ignoreOrd: Optional[int] = None) -> Optional[str]:
         """
         Deals with the newly created fields having a unique name.
@@ -90,16 +99,22 @@ class AddFameDialog(QDialog):
                 return None
         return txt
 
-    ### MODIFIED FROM https://github.com/ankitects/anki/blob/d110c4916cf1d83fbeae48ae891515c79a412018/qt/aqt/fields.py#L179
+    # See https://github.com/ankitects/anki/blob/d110c4916cf1d83fbeae48ae891515c79a412018/qt/aqt/fields.py#L179
     def accept(self) -> None:
         """
         When the OK button in the Dialog is clicked, start adding the Fame.
         """
 
+        # Check if we have a connection to Wikipedia.
+        try:
+            wiki.searchArticleUrl("Noodles")
+        except error.URLError as err:
+            self._handleNetworkError(err)
+            return
+
         self.mm = ModelManager(self.bmw.col)
         self.change_tracker = ChangeTracker(self.bmw)
         self.currentIdx = len(self.model["flds"])
-        #content = self.bmw.col.getNote(self.nids[0])["Years"]
 
         fieldName = [self.fDict[0]["useFieldName"].text(), self.fDict[1]["useFieldName"].text()]
         if self.fDict[0]["gb"].isChecked():        
@@ -112,21 +127,37 @@ class AddFameDialog(QDialog):
             self.mm.add_field(self.model, f)
 
         def on_done(changes: OpChanges) -> None:
-            tooltip(tr.card_templates_changes_saved(), parent=self.parentWidget())
+            tooltip("New field \"" + self.fDict[0]["useFieldName"].text() + "\" added.", parent=self.parentWidget())
+            tooltip("Testing", parent=self.parentWidget())
             QDialog.accept(self)
 
         update_notetype_legacy(parent=self.bmw, notetype=self.model).success(on_done).run_in_background()
-        sleep(0.1)
+        sleep(0.1) # The previous command requires time to propagate its changes
 
-        if self.fDict[0]["gb"].isChecked():        
-            for nid in self.nids:
-                #content =  self.bmw.col.getNote(nid)["Years"]
-                note = self.bmw.col.getNote(nid)
+        if self.fDict[0]["gb"].isChecked():
+            progress = QProgressDialog("Adding Wikipedia Pageviews...", "Abort", 0, len(self.nids), self)
+            progress.setWindowModality(Qt.WindowModal)
+            progress.setMinimumDuration(1200)
+            progress.setMinimumSize(300,30)
+
+            for j in range(len(self.nids)):
+                progress.setValue(j)
+                progress.setLabelText("Adding Wikipedia Pageviews... ({}/{})".format(j+1,len(self.nids)))
+                note = self.bmw.col.getNote(self.nids[j])
                 mergeString = self.fDict[0]["edit"].toPlainText()
                 searchPhrase = self._mergeFieldIntoTag(mergeString, note)
-                pageviews = wiki.getPageviews(wiki.searchArticleUrl(searchPhrase))
+                try:
+                    pageviews = wiki.getPageviews(wiki.searchArticleUrl(searchPhrase))
+                except error.URLError as err:
+                    progress.setValue(len(self.nids))
+                    self._handleNetworkError(err, "Error encountered while querying \"" + searchPhrase +"\".")
+                    return
                 note[self.fDict[0]["useFieldName"].text()] = str(pageviews)
                 self.bmw.col.update_note(note)
+                if progress.wasCanceled():
+                    break
+
+            progress.setValue(len(self.nids))
 
         self.close()
 
