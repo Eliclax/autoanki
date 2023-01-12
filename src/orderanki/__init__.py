@@ -1,5 +1,5 @@
 from aqt import mw, gui_hooks, AnkiQt
-from aqt.utils import qconnect, tooltip, showWarning
+from aqt.utils import qconnect, tooltip, showWarning, showInfo
 from aqt.qt import *
 from anki.notes import NoteId, Note
 from anki.models import NotetypeDict, NotetypeId, ModelManager
@@ -8,9 +8,12 @@ from aqt.fields import *
 from time import sleep
 import re
 from typing import Sequence, Optional, Union, List
-
 from . import wiki
 from urllib import error
+import concurrent.futures
+import queue
+import time
+import requests
 
 class AddFameDialog(QDialog):
     """
@@ -37,7 +40,7 @@ class AddFameDialog(QDialog):
         self.currentIdx: Optional[int] = None
 
     def _handleNetworkError(self, err: Exception, msg: str = "") -> None:
-        if isinstance(err, error.HTTPError):
+        if isinstance(err, requests.HTTPError):
             txt = str(err.code) + " HTTP ERROR"
         else:
             txt = tr.addons_please_check_your_internet_connection() + "\n\nError: " + str(err.reason)
@@ -105,6 +108,34 @@ class AddFameDialog(QDialog):
         When the OK button in the Dialog is clicked, start adding the Fame.
         """
 
+        # Make the new Wiki field
+        def _addField(fieldName: str) -> None:
+            """
+            Add a field to the model called fieldName.
+
+            :param fieldName: The name of the field to add.
+            """
+
+            self.mm = ModelManager(self.bmw.col)
+            self.change_tracker = ChangeTracker(self.bmw)
+            self.currentIdx = len(self.model["flds"])
+            # fieldName = [self.fDict[0]["useFieldName"].text(), self.fDict[1]["useFieldName"].text()]
+            if self.fDict[0]["gb"].isChecked():        
+                fieldName = self._uniqueName(fieldName)
+                if not fieldName:
+                    return
+                if not self.change_tracker.mark_schema():
+                    return
+                f = self.mm.new_field(fieldName)
+                self.mm.add_field(self.model, f)
+
+            def on_done(changes: OpChanges) -> None:
+                tooltip("New field \"" + self.fDict[0]["useFieldName"].text() + "\" added.", parent=self.parentWidget())
+                QDialog.accept(self)
+
+            update_notetype_legacy(parent=self.bmw, notetype=self.model).success(on_done).run_in_background()
+            sleep(0.1) # The previous command requires time to propagate its changes
+
         # Check if we have a connection to Wikipedia.
         try:
             wiki.searchArticleUrl("Noodles")
@@ -112,52 +143,133 @@ class AddFameDialog(QDialog):
             self._handleNetworkError(err)
             return
 
-        self.mm = ModelManager(self.bmw.col)
-        self.change_tracker = ChangeTracker(self.bmw)
-        self.currentIdx = len(self.model["flds"])
+        _addField(self.fDict[0]["useFieldName"].text())
 
-        fieldName = [self.fDict[0]["useFieldName"].text(), self.fDict[1]["useFieldName"].text()]
-        if self.fDict[0]["gb"].isChecked():        
-            name = self._uniqueName(fieldName[0])
-            if not name:
-                return
-            if not self.change_tracker.mark_schema():
-                return
-            f = self.mm.new_field(name)
-            self.mm.add_field(self.model, f)
-
-        def on_done(changes: OpChanges) -> None:
-            tooltip("New field \"" + self.fDict[0]["useFieldName"].text() + "\" added.", parent=self.parentWidget())
-            tooltip("Testing", parent=self.parentWidget())
-            QDialog.accept(self)
-
-        update_notetype_legacy(parent=self.bmw, notetype=self.model).success(on_done).run_in_background()
-        sleep(0.1) # The previous command requires time to propagate its changes
-
+        # Add wikipedia fame?
         if self.fDict[0]["gb"].isChecked():
-            progress = QProgressDialog("Adding Wikipedia Pageviews...", "Abort", 0, len(self.nids), self)
+            # Setup Progress Dialog
+            progress = QProgressDialog("Adding Wikipedia Pageviews...", "Stop", 0, len(self.nids)*2, self)
             progress.setWindowModality(Qt.WindowModal)
-            progress.setMinimumDuration(1200)
+            progress.setMinimumDuration(0)
             progress.setMinimumSize(300,30)
 
-            for j in range(len(self.nids)):
-                progress.setValue(j)
-                progress.setLabelText("Adding Wikipedia Pageviews... ({}/{})".format(j+1,len(self.nids)))
-                note = self.bmw.col.getNote(self.nids[j])
-                mergeString = self.fDict[0]["edit"].toPlainText()
-                searchPhrase = self._mergeFieldIntoTag(mergeString, note)
-                try:
-                    pageviews = wiki.getPageviews(wiki.searchArticleUrl(searchPhrase))
-                except error.URLError as err:
-                    progress.setValue(len(self.nids))
-                    self._handleNetworkError(err, "Error encountered while querying \"" + searchPhrase +"\".")
-                    return
-                note[self.fDict[0]["useFieldName"].text()] = str(pageviews)
-                self.bmw.col.update_note(note)
-                if progress.wasCanceled():
-                    break
+            CONNECTIONS = 30
+            TIMEOUT = 5
+            RATE = 30
+            PER = 1
 
-            progress.setValue(len(self.nids))
+            def _searchWiki(sp: str, ti: float = TIMEOUT) -> str:
+                """
+                Wrapper for wiki.searchArticleUrl()
+                """
+                try:
+                    article = wiki.searchArticleUrl(sp,ti)
+                except requests.HTTPError as err:
+                    #self._handleNetworkError(err)
+                    raise
+                return article
+
+            def _getPageviews(
+                ar: Union[str, None], #article
+                pr: str = "en.wikipedia.org", #project
+                ac: str = "all-access", #access
+                ag: str = "user", #agent
+                gr: str = "monthly", #granulatiry
+                st: str = "20150701", #start
+                en: str = "20230101", #end
+                ti: float = TIMEOUT #timeout
+                ) -> int:
+                """
+                Wrapped for wiki.getPageviews()
+                """
+
+                try:
+                    pv: int = wiki.getPageviews(ar,pr,ac,ag,gr,st,en,ti)
+                except requests.HTTPError as err:
+                    #self._handleNetworkError(err)
+                    raise
+                return pv
+
+            searchTimes = [-PER] * RATE
+            pVTimes = [-PER] * RATE
+            searchNo = 0
+            pVNo = 0
+
+            sps: queue.Queue = queue.Queue()
+            mergeString = self.fDict[0]["edit"].toPlainText()
+            [sps.put((self._mergeFieldIntoTag(mergeString,self.bmw.col.getNote(nid)),nid)) for nid in self.nids]
+
+            articles = queue.Queue()
+            
+            # Multi-threaded 
+            with concurrent.futures.ThreadPoolExecutor(max_workers=CONNECTIONS) as executorSearch:
+                busySearch = 0
+                with concurrent.futures.ThreadPoolExecutor(max_workers=CONNECTIONS) as executorPV:
+                    busyPV = 0
+
+                    prog = 0
+                    populated = 0
+                    errors = 0
+
+                    future_requests = {}
+                    while future_requests or not sps.empty() or not articles.empty():
+                        if progress.wasCanceled():
+                            break
+
+                        # IF (a) there are still searchPhrases and (b) it has been PER seconds since RATE searches ago and
+                        # (c) there is a thread ready to receive work: THEN give that thread work.
+                        while not sps.empty() and time.time() > searchTimes[searchNo % RATE] + PER * 1.01 and busySearch < CONNECTIONS:
+                            searchTimes[searchNo % RATE] = time.time()
+                            searchNo += 1
+                            busySearch += 1
+                            sp, nid = sps.get()
+                            future_requests[executorSearch.submit(_searchWiki,sp,ti=TIMEOUT)] = (executorSearch, nid)
+
+                        done, _ = concurrent.futures.wait(
+                                    future_requests, timeout=0.01,
+                                    return_when=concurrent.futures.FIRST_COMPLETED)
+
+                        for future in done:
+                            prog += 1
+                            progress.setValue(prog)
+                            res = future.result()
+                            exe, nid = future_requests[future]
+                            if exe == executorSearch:
+                                busySearch -= 1
+                                if res is None or isinstance(res, requests.HTTPError):
+                                    note = self.bmw.col.getNote(nid)
+                                    if res is None:
+                                        note[self.fDict[0]["useFieldName"].text()] = "ERROR: Wikipedia return no search results"
+                                    else:
+                                        note[self.fDict[0]["useFieldName"].text()] = "ERROR: HTTP Error while searching for article"
+                                    self.bmw.col.update_note(note)
+                                    errors += 1
+                                    prog += 1
+                                    progress.setValue(prog)
+                                else:
+                                    articles.put((res,nid))
+                            if exe == executorPV:
+                                busyPV -= 1
+                                note = self.bmw.col.getNote(nid)
+                                if isinstance(res, requests.HTTPError):
+                                    note[self.fDict[0]["useFieldName"].text()] = "HTTP Error while querying pageviews"
+                                    errors += 1
+                                else:
+                                    note[self.fDict[0]["useFieldName"].text()] = str(res)
+                                    populated += 1
+                                self.bmw.col.update_note(note)
+                            del future_requests[future]
+                            
+                        # Same as top paragraph of loop
+                        while not articles.empty() and time.time() > pVTimes[pVNo % RATE] + PER * 1.01 and busyPV < CONNECTIONS:
+                            pVTimes[pVNo % RATE] = time.time()
+                            pVNo += 1
+                            busyPV += 1
+                            article, nid = articles.get()
+                            future_requests[executorPV.submit(_getPageviews,article,ti=TIMEOUT)] = (executorPV, nid)
+
+            msg = "Added Pageview data for {} out of {} selected notes. {} errors".format(populated,len(self.nids),errors)
+            showInfo(msg, textFormat="rich", parent=self)
 
         self.close()
 
