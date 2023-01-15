@@ -1,3 +1,4 @@
+from math import ceil
 from aqt import mw, gui_hooks, AnkiQt
 from aqt.utils import qconnect, tooltip, showWarning, showInfo
 from aqt.qt import *
@@ -8,12 +9,15 @@ from aqt.fields import *
 from time import sleep
 import re
 from typing import Sequence, Optional, Union, List
+
 from . import wiki
 from urllib import error
 import concurrent.futures
 import queue
 import time
 import requests
+
+TESTING = False
 
 class AddFameDialog(QDialog):
     """
@@ -33,9 +37,9 @@ class AddFameDialog(QDialog):
         self.nids = nids
         self.nid = self.nids[0]
         self.bmw: AnkiQt = self.browser.mw
-        note: Note = self.bmw.col.getNote(self.nid)
-        self.model: Optional[Union[NotetypeDict, NotetypeId]] = note.model()
-        self.fields = self.bmw.col.models.fieldNames(self.model)
+        note: Note = self.bmw.col.get_note(self.nid)
+        self.model: Optional[NotetypeDict] = note.note_type()
+        self.fields = self.bmw.col.models.field_names(self.model)
         self._setupUi()
         self.currentIdx: Optional[int] = None
 
@@ -119,159 +123,297 @@ class AddFameDialog(QDialog):
             self.mm = ModelManager(self.bmw.col)
             self.change_tracker = ChangeTracker(self.bmw)
             self.currentIdx = len(self.model["flds"])
-            # fieldName = [self.fDict[0]["useFieldName"].text(), self.fDict[1]["useFieldName"].text()]
-            if self.fDict[0]["gb"].isChecked():        
-                fieldName = self._uniqueName(fieldName)
-                if not fieldName:
-                    return
-                if not self.change_tracker.mark_schema():
-                    return
-                f = self.mm.new_field(fieldName)
-                self.mm.add_field(self.model, f)
+            fieldName = self._uniqueName(fieldName)
+            if not fieldName:
+                return
+            if not self.change_tracker.mark_schema():
+                return
+            f = self.mm.new_field(fieldName)
+            self.mm.add_field(self.model, f)
 
             def on_done(changes: OpChanges) -> None:
                 tooltip("New field \"" + self.fDict[0]["useFieldName"].text() + "\" added.", parent=self.parentWidget())
                 QDialog.accept(self)
 
             update_notetype_legacy(parent=self.bmw, notetype=self.model).success(on_done).run_in_background()
-            sleep(0.1) # The previous command requires time to propagate its changes
-
-        # Check if we have a connection to Wikipedia.
-        try:
-            wiki.searchArticleUrl("Noodles")
-        except error.URLError as err:
-            self._handleNetworkError(err)
-            return
-
-        _addField(self.fDict[0]["useFieldName"].text())
+            sleep(0.2) # The previous command requires time to propagate its changes
 
         # Add wikipedia fame?
         if self.fDict[0]["gb"].isChecked():
+            # Check if we have a connection to Wikipedia.
+            try:
+                wiki.search_article_url("Noodles")
+            except error.URLError as err:
+                self._handleNetworkError(err)
+                return
+
+            CONNECTIONS = 100
+            RATE = 100
+            PER = 1
+            TIMEOUT = 5
+            MAX_TITLES = 10
+
             # Setup Progress Dialog
-            progress = QProgressDialog("Adding Wikipedia Pageviews...", "Stop", 0, len(self.nids)*2, self)
+            progress = QProgressDialog("Adding Wikipedia Pageviews...", "Stop", 0, len(self.nids)*2-len(self.nids)//-MAX_TITLES, self)
             progress.setWindowModality(Qt.WindowModal)
             progress.setMinimumDuration(0)
             progress.setMinimumSize(300,30)
 
-            CONNECTIONS = 30
-            TIMEOUT = 5
-            RATE = 30
-            PER = 1
+            # Add necessary fields
+            fieldName = self.fDict[0]["useFieldName"].text()
+            _addField(fieldName)
+            _addField(fieldName + " (URL)")
+            _addField(fieldName + " (Description)")
+            _addField(fieldName + " (URL fixed)")
 
-            def _searchWiki(sp: str, ti: float = TIMEOUT) -> str:
-                """
-                Wrapper for wiki.searchArticleUrl()
-                """
-                try:
-                    article = wiki.searchArticleUrl(sp,ti)
-                except requests.HTTPError as err:
-                    #self._handleNetworkError(err)
-                    raise
-                return article
-
-            def _getPageviews(
-                ar: Union[str, None], #article
-                pr: str = "en.wikipedia.org", #project
-                ac: str = "all-access", #access
-                ag: str = "user", #agent
-                gr: str = "monthly", #granulatiry
-                st: str = "20150701", #start
-                en: str = "20230101", #end
-                ti: float = TIMEOUT #timeout
-                ) -> int:
-                """
-                Wrapped for wiki.getPageviews()
-                """
-
-                try:
-                    pv: int = wiki.getPageviews(ar,pr,ac,ag,gr,st,en,ti)
-                except requests.HTTPError as err:
-                    #self._handleNetworkError(err)
-                    raise
-                return pv
-
-            searchTimes = [-PER] * RATE
-            pVTimes = [-PER] * RATE
+            searchTimes = [-2*PER] * RATE
+            pVTimes = [-2*PER] * RATE
+            descTimes = [-2*PER] * RATE
             searchNo = 0
             pVNo = 0
+            descNo = 0
 
-            sps: queue.Queue = queue.Queue()
+            sps: queue.Queue[wiki.Wikifame] = queue.Queue()
             mergeString = self.fDict[0]["edit"].toPlainText()
-            [sps.put((self._mergeFieldIntoTag(mergeString,self.bmw.col.getNote(nid)),nid)) for nid in self.nids]
+            for nid in self.nids:
+                search_phrase = self._mergeFieldIntoTag(mergeString,self.bmw.col.get_note(nid))
+                wf = wiki.Wikifame(self.bmw,nid,search_phrase=search_phrase)
+                wf.field_names["pageviews"] = self.fDict[0]["useFieldName"].text()
+                wf.field_names["article"] = self.fDict[0]["useFieldName"].text() + " (URL)"
+                wf.field_names["article_fixed"] = self.fDict[0]["useFieldName"].text() + " (URL fixed)"
+                wf.field_names["desc"] = self.fDict[0]["useFieldName"].text() + " (Description)"
+                wf.project = "en.wikipedia.org"
+                sps.put(wf)
 
-            articles = queue.Queue()
+            q_for_pageviews: queue.Queue[wiki.Wikifame] = queue.Queue()
+            q_for_desc: queue.Queue[wiki.Wikifame] = queue.Queue()
+            q_for_PV_ints: queue.Queue[wiki.Wikifame] = queue.Queue()
+            q_for_article_strs: queue.Queue[wiki.Wikifame] = queue.Queue()
+            q_for_desc_strs: queue.Queue[wiki.Wikifame] = queue.Queue()
+            #list_for_desc: List[wiki.Wikifame] = []
             
-            # Multi-threaded 
-            with concurrent.futures.ThreadPoolExecutor(max_workers=CONNECTIONS) as executorSearch:
-                busySearch = 0
-                with concurrent.futures.ThreadPoolExecutor(max_workers=CONNECTIONS) as executorPV:
-                    busyPV = 0
+            # Multi-threaded query loop initialisation
+            executorSearch = concurrent.futures.ThreadPoolExecutor(max_workers=CONNECTIONS)
+            executorPV = concurrent.futures.ThreadPoolExecutor(max_workers=CONNECTIONS)
+            executorDesc = concurrent.futures.ThreadPoolExecutor(max_workers=CONNECTIONS)
+            busySearch = 0
+            busyPV = 0
+            busyDesc = 0
+            countDesc = 0
+            
+            prog = 0
+            populated = 0
+            errors = 0
+            future_requests = {}
+            descStrs = []
 
-                    prog = 0
-                    populated = 0
-                    errors = 0
+            # Multi-threaded query loop
+            while future_requests or not sps.empty() or not q_for_pageviews.empty() or not q_for_desc.empty():# or countDesc < len(self.nids):
+                if progress.wasCanceled():
+                    break
 
-                    future_requests = {}
-                    while future_requests or not sps.empty() or not articles.empty():
-                        if progress.wasCanceled():
-                            break
+                # IF (a) there are still searchPhrases and (b) it has been PER seconds since RATE searches ago and
+                # (c) there is a thread ready to receive work: THEN give that thread work.
+                while not sps.empty() and time.time() > searchTimes[searchNo % RATE] + PER * 1.01 and busySearch < CONNECTIONS:
+                    searchTimes[searchNo % RATE] = time.time()
+                    searchNo += 1
+                    busySearch += 1
+                    sp = sps.get()
+                    future_requests[executorSearch.submit(wiki.Wikifame.search_up_article,sp,timeout=TIMEOUT)] = (executorSearch, [sp])
 
-                        # IF (a) there are still searchPhrases and (b) it has been PER seconds since RATE searches ago and
-                        # (c) there is a thread ready to receive work: THEN give that thread work.
-                        while not sps.empty() and time.time() > searchTimes[searchNo % RATE] + PER * 1.01 and busySearch < CONNECTIONS:
-                            searchTimes[searchNo % RATE] = time.time()
-                            searchNo += 1
-                            busySearch += 1
-                            sp, nid = sps.get()
-                            future_requests[executorSearch.submit(_searchWiki,sp,ti=TIMEOUT)] = (executorSearch, nid)
+                done, _ = concurrent.futures.wait(future_requests, timeout=0.01, return_when=concurrent.futures.FIRST_COMPLETED)
 
-                        done, _ = concurrent.futures.wait(
-                                    future_requests, timeout=0.01,
-                                    return_when=concurrent.futures.FIRST_COMPLETED)
-
-                        for future in done:
+                for future in done:
+                    res: Optional[Union[wiki.Wikifame, List[str]]] = future.result()
+                    exe, listWfs = future_requests[future]
+                    if exe == executorSearch:
+                        busySearch -= 1
+                        if res is None or isinstance(res, requests.HTTPError):
+                            errors += 1
                             prog += 1
                             progress.setValue(prog)
-                            res = future.result()
-                            exe, nid = future_requests[future]
-                            if exe == executorSearch:
-                                busySearch -= 1
-                                if res is None or isinstance(res, requests.HTTPError):
-                                    note = self.bmw.col.getNote(nid)
-                                    if res is None:
-                                        note[self.fDict[0]["useFieldName"].text()] = "ERROR: Wikipedia return no search results"
-                                    else:
-                                        note[self.fDict[0]["useFieldName"].text()] = "ERROR: HTTP Error while searching for article"
-                                    self.bmw.col.update_note(note)
-                                    errors += 1
-                                    prog += 1
-                                    progress.setValue(prog)
-                                else:
-                                    articles.put((res,nid))
-                            if exe == executorPV:
-                                busyPV -= 1
-                                note = self.bmw.col.getNote(nid)
-                                if isinstance(res, requests.HTTPError):
-                                    note[self.fDict[0]["useFieldName"].text()] = "HTTP Error while querying pageviews"
-                                    errors += 1
-                                else:
-                                    note[self.fDict[0]["useFieldName"].text()] = str(res)
-                                    populated += 1
-                                self.bmw.col.update_note(note)
-                            del future_requests[future]
-                            
-                        # Same as top paragraph of loop
-                        while not articles.empty() and time.time() > pVTimes[pVNo % RATE] + PER * 1.01 and busyPV < CONNECTIONS:
-                            pVTimes[pVNo % RATE] = time.time()
-                            pVNo += 1
-                            busyPV += 1
-                            article, nid = articles.get()
-                            future_requests[executorPV.submit(_getPageviews,article,ti=TIMEOUT)] = (executorPV, nid)
+                        else:
+                            q_for_pageviews.put(res)
+                            q_for_desc.put(res)
+                            q_for_article_strs.put(res)
+                            #list_for_desc.append(res)
+                    elif exe == executorPV:
+                        busyPV -= 1
+                        # note = self.bmw.col.get_note(nid)
+                        # self.bmw.col.update_note(note)
+                        if isinstance(res, requests.HTTPError):
+                            errors += 1
+                        else:
+                            populated += 1
+                        q_for_PV_ints.put(res)
+                    elif exe == executorDesc:
+                        busyDesc -= 1
+                        q_for_desc_strs.put(res)
+                        print("Entering part E")
+                        # note = self.bmw.col.get_note(nid)
+                        # self.bmw.col.update_note(note)
+                        # print(res)
+                        # for j in range(len(res)):
+                        #     wfss: wiki.Wikifame = listWfs[j]
+                        #     wfss.fields["desc"] = res[j]
+                        #     wfss.note[wfss.field_names["desc"]] = str(res[j])
+                        #     self.bmw.col.update_note(wfss.note)
+                        #     print(wfss.field_names["desc"])
+                        #     print("2: "  +self.bmw.col.get_note(wfss.nid)[wfss.field_names["desc"]])
+                        #     print("2.1: "+self.bmw.col.get_note(self.nids[0])["Wiki Pageviews (Description)"])
+
+                    print("Entering part E.1")
+                    prog += 1
+                    print("Entering part E.2")
+                    progress.setValue(prog)
+                    print("Entering part E.3")
+                    del future_requests[future]
+                    print("Entering part E.4")
+                    
+                # Same as top paragraph of loop for actual pageviews
+                while not q_for_pageviews.empty() and time.time() > pVTimes[pVNo % RATE] + PER * 1.01 and busyPV < CONNECTIONS:
+                    pVTimes[pVNo % RATE] = time.time()
+                    pVNo += 1
+                    busyPV += 1
+                    wf = q_for_pageviews.get()
+                    future_requests[executorPV.submit(wiki.Wikifame.fill_pageviews,wf,timeout=TIMEOUT)] = (executorPV, [wf])
+
+                while not q_for_desc.empty() and time.time() > descTimes[descNo % RATE] + PER * 1.01 and busyDesc < CONNECTIONS:
+                    print("Entering part D")
+                    descTimes[descNo % RATE] = time.time()
+                    descNo += 1
+                    busyDesc += 1
+                    print("Entering part D.0")
+                    wf = q_for_desc.get()
+                    print("Entering part D.1")
+                    future_requests[executorDesc.submit(wiki.Wikifame.fill_description,wf,timeout=TIMEOUT)] = (executorDesc, [wf])
+                    print("Entering part D.2")
+
+
+                # def b1() -> bool: return countDesc + MAX_TITLES < len(list_for_desc)
+                # def b2() -> bool: return not future_requests and sps.empty() and q_for_pageviews.empty() and countDesc < len(self.nids)
+                # while (b1() or b2()) and time.time() > descTimes[descNo % RATE] + PER * 1.01 and busyDesc < CONNECTIONS:
+                #     descTimes[descNo % RATE] = time.time()
+                #     descNo += 1
+                #     busyDesc += 1
+                #     k = countDesc
+                #     l = min(MAX_TITLES, len(list_for_desc)-k)
+                #     for j in range(countDesc, len(list_for_desc)):
+                #         descStrs.append(list_for_desc[j].fields["article"])
+                #     future_requests[executorDesc.submit(wiki.get_desc,descStrs[k:k+l],timeout=TIMEOUT)] = (executorDesc, list_for_desc[k:k+l])
+                #     countDesc += l
+
+            # Multi-threaded query loop clean-up
+
+            print("Entering part F")
+
+            executorSearch.shutdown(wait = False, cancel_futures = True)
+            executorPV.shutdown(wait = False, cancel_futures = True)
+            executorDesc.shutdown(wait = False, cancel_futures = True)
+
+            print("Entering part F.1")
+
+
+            # print(cleanedWfs)
+            # print(cleanedStrs)
+
+            # i = 0
+            # while i < len(list_for_desc) or future_requests:
+            #     while i < len(list_for_desc) and time.time() > descTimes[descNo % RATE] + PER * 1.01 and busyDesc < CONNECTIONS:
+            #         print("Entering Loop A")
+            #         descTimes[descNo % RATE] = time.time()
+            #         descNo += 1
+            #         busyDesc += 1
+            #         l = min(MAX_TITLES, len(list_for_desc)-i)
+            #         future_requests[executorDesc.submit(wiki.get_desc,cleanedStrs[i:i+l],timeout=TIMEOUT)] = cleanedWfs[i:i+l]
+            #         i += MAX_TITLES
+
+            #     done, _ = concurrent.futures.wait(future_requests, timeout=0.01, return_when=concurrent.futures.FIRST_COMPLETED)
+
+            #     for future in done:
+            #         print("Entering B")
+            #         busyDesc -= 1
+            #         res: Optional[List[str]] = future.result()
+            #         wfs: List[wiki.Wikifame] = future_requests[future]
+            #         if res is not None:
+            #             if len(res) == 1:
+            #                 res *= 2
+            #                 wfs *= 2
+            #             print(res)
+            #             for j in range(len(res)):
+            #                 wfs[j].set("desc",res[j])
+            #                 note = wfs[j].note
+            #                 self.bmw.col.update_note(note)
+            #                 print(wfs[j].field_names["desc"])
+            #                 print("2: "  +self.bmw.col.get_note(wfs[j].nid)[wfs[j].field_names["desc"]])
+            #                 print("2.1: "+self.bmw.col.get_note(self.nids[0])["Wiki Pageviews (Description)"])
+            #             prog += 1
+            
+            #             progress.setValue(prog)
+            #         else:
+            #             note = wfs[j].note
+            #             self.bmw.col.update_note(note)
+
+            #         del future_requests[future]
+
+            # print("2.3: "+self.bmw.col.get_note(self.nids[0])["Wiki Pageviews (Description)"])
+            # self.bmw.col.update_note(self.bmw.col.get_note(self.nids[0]))
+            # #executorDesc.shutdown(wait = False)
+            # print("2.4: "+self.bmw.col.get_note(self.nids[0])["Wiki Pageviews (Description)"])
+
+            progress.setValue(progress.maximum())
 
             msg = "Added Pageview data for {} out of {} selected notes. {} errors".format(populated,len(self.nids),errors)
+            print("2.5: "+self.bmw.col.get_note(self.nids[0])["Wiki Pageviews"])
+            print("2.5: "+self.bmw.col.get_note(self.nids[0])["Wiki Pageviews (Description)"])
             showInfo(msg, textFormat="rich", parent=self)
+            print("2.6: "+self.bmw.col.get_note(self.nids[0])["Wiki Pageviews"])
+            print("2.6: "+self.bmw.col.get_note(self.nids[0])["Wiki Pageviews (Description)"])
+
+            for nid in self.nids:
+                search_phrase = self._mergeFieldIntoTag(mergeString,self.bmw.col.get_note(nid))
+                wf = wiki.Wikifame(self.bmw,nid,search_phrase=search_phrase)
+                wf.field_names["pageviews"] = self.fDict[0]["useFieldName"].text()
+                wf.field_names["article"] = self.fDict[0]["useFieldName"].text() + " (URL)"
+                wf.field_names["article_fixed"] = self.fDict[0]["useFieldName"].text() + " (URL fixed)"
+                wf.field_names["desc"] = self.fDict[0]["useFieldName"].text() + " (Description)"
+                wf.project = "en.wikipedia.org"
+                sps.put(wf)
+
+            wf = sps.get()
+            # print("2.65: "+wf.fields["pageviews"])
+            # print("2.65: "+wf.fields["desc"])
+
+        while not q_for_article_strs.empty():
+            wf = q_for_article_strs.get()
+            print("wf.field_names[\"article\"]: " + wf.field_names["article"])
+            print("str(wf.fields[\"article\"]): " + str(wf.fields["article"]))
+            wf.note[wf.field_names["article"]] = str(wf.fields["article"])
+            wf.mw.col.update_note(wf.note)
+
+        while not q_for_PV_ints.empty():
+            wf = q_for_PV_ints.get()
+            print("wf.field_names[\"pageviews\"]: " + wf.field_names["pageviews"])
+            print("str(wf.fields[\"pageviews\"]): " + str(wf.fields["pageviews"]))
+            wf.note[wf.field_names["pageviews"]] = str(wf.fields["pageviews"])
+            wf.mw.col.update_note(wf.note)
+
+        while not q_for_desc_strs.empty():
+            wf = q_for_desc_strs.get()
+            print("wf.field_names[\"desc\"]: " + wf.field_names["desc"])
+            print("str(wf.fields[\"desc\"]): " + str(wf.fields["desc"]))
+            wf.note[wf.field_names["desc"]] = str(wf.fields["desc"])
+            wf.mw.col.update_note(wf.note)
 
         self.close()
+
+        print("2.7: "+self.bmw.col.get_note(self.nids[0])["Wiki Pageviews"])
+        print("2.7: "+self.bmw.col.get_note(self.nids[0])["Wiki Pageviews (Description)"])
+
+        self.bmw.col.get_note(self.nids[0])["Wiki Pageviews (Description)"] = "HI!!"
+        self.bmw.col.update_note(self.bmw.col.get_note(self.nids[0]))
+        print("2.8: "+self.bmw.col.get_note(self.nids[0])["Wiki Pageviews"])
+        print("2.8: "+self.bmw.col.get_note(self.nids[0])["Wiki Pageviews (Description)"])
 
     def _setupUi(self) -> None:
         """
@@ -309,6 +451,7 @@ class AddFameDialog(QDialog):
             desc_msg = "Add fields containing the number of Wikipedia pageviews "
             desc_msg+= "for an article (the first that Wikipedia search returns) and/or "
             desc_msg+= "the number of Google hits for a search term.  Note: ensure no field begins with '{'."
+            desc_msg+= "Note: A super weird bug prevents proper function when only 1 card is selected."
             desc = QLabel(desc_msg)
             desc.setWordWrap(True)
             ivbox.addWidget(desc)
@@ -327,6 +470,8 @@ class AddFameDialog(QDialog):
                 fd = self.fDict[i]
                 fd["gb"] = QGroupBox(fd["gbName"])
                 fd["gb"].setCheckable(True)
+                if TESTING and i == 1:
+                    fd["gb"].setChecked(False)
                 if True:
                     fd["vbox"] = QVBoxLayout()
                     if True:
@@ -337,6 +482,9 @@ class AddFameDialog(QDialog):
                             fd["insertSelect"].currentIndexChanged.connect(lambda _, x = i: _insertField(x))
                         fd["insertField"].addRow(QLabel("Insert field:"), fd["insertSelect"])
                         fd["edit"] = QPlainTextEdit()
+                        if TESTING and i == 0:
+                            fd["edit"].insertPlainText("{{Name}}")
+
                         fd["example"] = QLabel("<b>Example:</b> ")
                         fd["example"].setWordWrap(True)
                         fd["useField"] = QFormLayout()
