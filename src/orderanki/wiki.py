@@ -52,17 +52,17 @@ else:
             if self.note is None and self.nid is not None:
                 self.note = self.mw.col.get_note(self.nid)
             self.search_phrase = search_phrase
-            self.fields: Dict = {}
-            self.field_names: Dict = {}
-            self.fields["article"] = article
-            self.field_names["article"] = article_field_name
-            self.fields["article_fixed"] = article_fixed
-            self.field_names["article_fixed"] = article_fixed_field_name
-            self.fields["desc"] = desc
-            self.field_names["desc"] = desc_field_name
-            self.fields["pageviews"] = pageviews
-            self.field_names["pageviews"] = pageviews_field_name
             self.project = project
+            self.fields: Dict = {}
+            self.fields["article"] = article
+            self.fields["article_fixed"] = article_fixed
+            self.fields["desc"] = desc
+            self.fields["pageviews"] = pageviews
+            self.field_names: Dict = {}
+            self.field_names["article"] = article_field_name
+            self.field_names["article_fixed"] = article_fixed_field_name
+            self.field_names["desc"] = desc_field_name
+            self.field_names["pageviews"] = pageviews_field_name
 
         def set(self, field: str, value: Optional[Union[str, int]]) -> None:
             """
@@ -81,6 +81,14 @@ else:
             self.mw.col.update_note(self.note)
 
         def search_up_article(self, timeout: float = 5) -> 'Wikifame':
+            """
+            If self.search_phrase is populated, this populates "article" and "article_fixed"
+            """
+
+            if self.search_phrase is None:
+                self.set("article","ERROR: No Search Phrase")
+                self.set("article_fixed","ERROR: No Search Phrase")
+                raise Exception
             try:
                 article = search_article_url(self.search_phrase, timeout)
                 self.set("article",article)
@@ -92,6 +100,10 @@ else:
             return self
 
         def fill_pageviews(self, timeout: float = 5) -> 'Wikifame':
+            """
+            If "article" is populated, this populates "pageviews"
+            """
+
             try:
                 pageviews = get_pageviews(self.fields["article"], self.project, timeout=timeout)
                 self.set("pageviews",pageviews)
@@ -101,6 +113,10 @@ else:
             return self
 
         def fill_description(self, timeout: float = 5) -> 'Wikifame':
+            """
+            If "article" is populated, this populates "description"
+            """
+
             # if self.fields["article"] is None:
             #     self.search_up_article(timeout=timeout)
             try:
@@ -110,7 +126,6 @@ else:
                 self.set("desc", "ERROR: HTTP Error")
                 raise
             return self
-
 
 def search_article_url(search_phrase: str, timeout: float = 5) -> Optional[str]:
     """

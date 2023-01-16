@@ -41,6 +41,11 @@ class AddFameDialog(QDialog):
         self.model: Optional[NotetypeDict] = note.note_type()
         self.fields = self.bmw.col.models.field_names(self.model)
         self._setupUi()
+        if len(self.nids) == 1:
+            msg = "<b>Adding Wikipedia fame to a single note</b><br><br>You have selected a single note.  Due to a weird bug I can't figure out, adding "
+            msg+= "Wikipedia fame data when selecting a single note will result in incomplete data. "
+            msg+= "This shouldn't pose any risk of messing up your deck, though."
+            showWarning(msg,parent=self,textFormat="rich")
         self.currentIdx: Optional[int] = None
 
     def _handleNetworkError(self, err: Exception, msg: str = "") -> None:
@@ -249,7 +254,6 @@ class AddFameDialog(QDialog):
                     elif exe == executorDesc:
                         busyDesc -= 1
                         q_for_desc_strs.put(res)
-                        print("Entering part E")
                         # note = self.bmw.col.get_note(nid)
                         # self.bmw.col.update_note(note)
                         # print(res)
@@ -262,13 +266,9 @@ class AddFameDialog(QDialog):
                         #     print("2: "  +self.bmw.col.get_note(wfss.nid)[wfss.field_names["desc"]])
                         #     print("2.1: "+self.bmw.col.get_note(self.nids[0])["Wiki Pageviews (Description)"])
 
-                    print("Entering part E.1")
                     prog += 1
-                    print("Entering part E.2")
                     progress.setValue(prog)
-                    print("Entering part E.3")
                     del future_requests[future]
-                    print("Entering part E.4")
                     
                 # Same as top paragraph of loop for actual pageviews
                 while not q_for_pageviews.empty() and time.time() > pVTimes[pVNo % RATE] + PER * 1.01 and busyPV < CONNECTIONS:
@@ -278,16 +278,13 @@ class AddFameDialog(QDialog):
                     wf = q_for_pageviews.get()
                     future_requests[executorPV.submit(wiki.Wikifame.fill_pageviews,wf,timeout=TIMEOUT)] = (executorPV, [wf])
 
+                # Same as top paragraph of loop for actual pageviews
                 while not q_for_desc.empty() and time.time() > descTimes[descNo % RATE] + PER * 1.01 and busyDesc < CONNECTIONS:
-                    print("Entering part D")
                     descTimes[descNo % RATE] = time.time()
                     descNo += 1
                     busyDesc += 1
-                    print("Entering part D.0")
                     wf = q_for_desc.get()
-                    print("Entering part D.1")
                     future_requests[executorDesc.submit(wiki.Wikifame.fill_description,wf,timeout=TIMEOUT)] = (executorDesc, [wf])
-                    print("Entering part D.2")
 
 
                 # def b1() -> bool: return countDesc + MAX_TITLES < len(list_for_desc)
@@ -303,16 +300,12 @@ class AddFameDialog(QDialog):
                 #     future_requests[executorDesc.submit(wiki.get_desc,descStrs[k:k+l],timeout=TIMEOUT)] = (executorDesc, list_for_desc[k:k+l])
                 #     countDesc += l
 
+            sleep(1)
+
             # Multi-threaded query loop clean-up
-
-            print("Entering part F")
-
             executorSearch.shutdown(wait = False, cancel_futures = True)
             executorPV.shutdown(wait = False, cancel_futures = True)
             executorDesc.shutdown(wait = False, cancel_futures = True)
-
-            print("Entering part F.1")
-
 
             # print(cleanedWfs)
             # print(cleanedStrs)
@@ -348,7 +341,7 @@ class AddFameDialog(QDialog):
             #                 print("2: "  +self.bmw.col.get_note(wfs[j].nid)[wfs[j].field_names["desc"]])
             #                 print("2.1: "+self.bmw.col.get_note(self.nids[0])["Wiki Pageviews (Description)"])
             #             prog += 1
-            
+
             #             progress.setValue(prog)
             #         else:
             #             note = wfs[j].note
@@ -384,26 +377,26 @@ class AddFameDialog(QDialog):
             # print("2.65: "+wf.fields["pageviews"])
             # print("2.65: "+wf.fields["desc"])
 
-        while not q_for_article_strs.empty():
-            wf = q_for_article_strs.get()
-            print("wf.field_names[\"article\"]: " + wf.field_names["article"])
-            print("str(wf.fields[\"article\"]): " + str(wf.fields["article"]))
-            wf.note[wf.field_names["article"]] = str(wf.fields["article"])
-            wf.mw.col.update_note(wf.note)
+        # while not q_for_article_strs.empty():
+        #     wf = q_for_article_strs.get()
+        #     print("wf.field_names[\"article\"]: " + wf.field_names["article"])
+        #     print("str(wf.fields[\"article\"]): " + str(wf.fields["article"]))
+        #     wf.note[wf.field_names["article"]] = str(wf.fields["article"])
+        #     wf.mw.col.update_note(wf.note)
 
-        while not q_for_PV_ints.empty():
-            wf = q_for_PV_ints.get()
-            print("wf.field_names[\"pageviews\"]: " + wf.field_names["pageviews"])
-            print("str(wf.fields[\"pageviews\"]): " + str(wf.fields["pageviews"]))
-            wf.note[wf.field_names["pageviews"]] = str(wf.fields["pageviews"])
-            wf.mw.col.update_note(wf.note)
+        # while not q_for_PV_ints.empty():
+        #     wf = q_for_PV_ints.get()
+        #     print("wf.field_names[\"pageviews\"]: " + wf.field_names["pageviews"])
+        #     print("str(wf.fields[\"pageviews\"]): " + str(wf.fields["pageviews"]))
+        #     wf.note[wf.field_names["pageviews"]] = str(wf.fields["pageviews"])
+        #     wf.mw.col.update_note(wf.note)
 
-        while not q_for_desc_strs.empty():
-            wf = q_for_desc_strs.get()
-            print("wf.field_names[\"desc\"]: " + wf.field_names["desc"])
-            print("str(wf.fields[\"desc\"]): " + str(wf.fields["desc"]))
-            wf.note[wf.field_names["desc"]] = str(wf.fields["desc"])
-            wf.mw.col.update_note(wf.note)
+        # while not q_for_desc_strs.empty():
+        #     wf = q_for_desc_strs.get()
+        #     print("wf.field_names[\"desc\"]: " + wf.field_names["desc"])
+        #     print("str(wf.fields[\"desc\"]): " + str(wf.fields["desc"]))
+        #     wf.note[wf.field_names["desc"]] = str(wf.fields["desc"])
+        #     wf.mw.col.update_note(wf.note)
 
         self.close()
 
