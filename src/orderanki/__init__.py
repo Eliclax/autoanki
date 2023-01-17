@@ -40,7 +40,7 @@ class AddFameDialog(QDialog):
         note: Note = self.bmw.col.get_note(self.nid)
         self.model: Optional[NotetypeDict] = note.note_type()
         self.fields = self.bmw.col.models.field_names(self.model)
-        self._setupUi()
+        self._setup_ui()
         if len(self.nids) == 1:
             msg = "<b>Adding Wikipedia fame to a single note</b><br><br>You have selected a single note.  Due to a weird bug I can't figure out, adding "
             msg+= "Wikipedia fame data when selecting a single note will result in incomplete data. "
@@ -48,48 +48,48 @@ class AddFameDialog(QDialog):
             showWarning(msg,parent=self,textFormat="rich")
         self.currentIdx: Optional[int] = None
 
-    def _handleNetworkError(self, err: Exception, msg: str = "") -> None:
+    def _handle_network_error(self, err: Exception, msg: str = "") -> None:
         if isinstance(err, requests.HTTPError):
             txt = str(err.code) + " HTTP ERROR"
         else:
             txt = tr.addons_please_check_your_internet_connection() + "\n\nError: " + str(err.reason)
         showWarning(msg + "\n\n" + txt, textFormat="rich", parent=self)
 
-    def _mergeFieldIntoTag(self, mergeString: str, note: Note) -> str:
+    def _merge_field_into_tag(self, merge_string: str, note: Note) -> str:
         """
         Merge the tags from a given Note into a merge String.
 
-        :param mergeString:  The string containing merge tags
+        :param merge_string:  The string containing merge tags
         :param note:  The note
         """
 
-        mergeResult = ""
-        mergeRe = r"\{\{[^\{].*?\}\}"
-        se = re.search(mergeRe, mergeString)
+        merge_result = ""
+        merge_re = r"\{\{[^\{].*?\}\}"
+        se = re.search(merge_re, merge_string)
         while se is not None:
-            fieldName = se.group()[2:-2]
+            field_name = se.group()[2:-2]
             # note = mw.col.get_note(self.nid)
-            noteValues = [item for item in note.items() if item[0] == fieldName]
-            if len(noteValues) >= 1:
-                mergeResult += mergeString[0:se.span()[0]] + str(noteValues[0][1])
+            note_values = [item for item in note.items() if item[0] == field_name]
+            if len(note_values) >= 1:
+                merge_result += merge_string[0:se.span()[0]] + str(note_values[0][1])
             else:
-                mergeResult += mergeString[0:se.span()[1]]
-            mergeString = mergeString[se.span()[1]:]
-            se = re.search(mergeRe, mergeString)
-        mergeResult += mergeString
-        return mergeResult
+                merge_result += merge_string[0:se.span()[1]]
+            merge_string = merge_string[se.span()[1]:]
+            se = re.search(merge_re, merge_string)
+        merge_result += merge_string
+        return merge_result
 
-    def _getFields(self) -> List[str]:
+    def _get_fields(self) -> List[str]:
         """
         Returns a list of field names for the model that the notes are based on.
 
         :return: A list of field names for the notes' model
         """
 
-        return self.bmw.col.models.fieldNames(self.model)
+        return self.bmw.col.models.field_names(self.model)
 
     # See https://github.com/ankitects/anki/blob/d110c4916cf1d83fbeae48ae891515c79a412018/qt/aqt/fields.py#L142
-    def _uniqueName(self, txt: str, ignoreOrd: Optional[int] = None) -> Optional[str]:
+    def _unique_name(self, txt: str, ignoreOrd: Optional[int] = None) -> Optional[str]:
         """
         Deals with the newly created fields having a unique name.
         """
@@ -118,26 +118,26 @@ class AddFameDialog(QDialog):
         """
 
         # Make the new Wiki field
-        def _addField(fieldName: str) -> None:
+        def _add_field(field_name: str) -> None:
             """
-            Add a field to the model called fieldName.
+            Add a field to the model called field_name.
 
-            :param fieldName: The name of the field to add.
+            :param field_name: The name of the field to add.
             """
 
             self.mm = ModelManager(self.bmw.col)
             self.change_tracker = ChangeTracker(self.bmw)
             self.currentIdx = len(self.model["flds"])
-            fieldName = self._uniqueName(fieldName)
-            if not fieldName:
+            field_name = self._unique_name(field_name)
+            if not field_name:
                 return
             if not self.change_tracker.mark_schema():
                 return
-            f = self.mm.new_field(fieldName)
+            f = self.mm.new_field(field_name)
             self.mm.add_field(self.model, f)
 
             def on_done(changes: OpChanges) -> None:
-                tooltip("New field \"" + self.fDict[0]["useFieldName"].text() + "\" added.", parent=self.parentWidget())
+                # tooltip("New field \"" + self.fDict[0]["useFieldName"].text() + "\" added.", parent=self.parentWidget())
                 QDialog.accept(self)
 
             update_notetype_legacy(parent=self.bmw, notetype=self.model).success(on_done).run_in_background()
@@ -149,14 +149,14 @@ class AddFameDialog(QDialog):
             try:
                 wiki.search_article_url("Noodles")
             except error.URLError as err:
-                self._handleNetworkError(err)
+                self._handle_network_error(err)
                 return
 
             CONNECTIONS = 100
             RATE = 100
             PER = 1
             TIMEOUT = 5
-            MAX_TITLES = 10
+            MAX_TITLES = 50
 
             # Setup Progress Dialog
             progress = QProgressDialog("Adding Wikipedia Pageviews...", "Stop", 0, len(self.nids)*2-len(self.nids)//-MAX_TITLES, self)
@@ -165,23 +165,24 @@ class AddFameDialog(QDialog):
             progress.setMinimumSize(300,30)
 
             # Add necessary fields
-            fieldName = self.fDict[0]["useFieldName"].text()
-            _addField(fieldName)
-            _addField(fieldName + " (URL)")
-            _addField(fieldName + " (Description)")
-            _addField(fieldName + " (URL fixed)")
+            field_name = self.fDict[0]["useFieldName"].text()
+            _add_field(field_name)
+            _add_field(field_name + " (URL)")
+            _add_field(field_name + " (Description)")
+            _add_field(field_name + " (URL fixed)")
+            tooltip("New fields based on \"" + self.fDict[0]["useFieldName"].text() + "\" added.", parent=self.parentWidget())
 
-            searchTimes = [-2*PER] * RATE
-            pVTimes = [-2*PER] * RATE
-            descTimes = [-2*PER] * RATE
-            searchNo = 0
-            pVNo = 0
-            descNo = 0
+            search_times = [-2*PER] * RATE
+            pv_times = [-2*PER] * RATE
+            desc_times = [-2*PER] * RATE
+            search_no = 0
+            pv_no = 0
+            desc_no = 0
 
             sps: queue.Queue[wiki.Wikifame] = queue.Queue()
-            mergeString = self.fDict[0]["edit"].toPlainText()
+            merge_string = self.fDict[0]["edit"].toPlainText()
             for nid in self.nids:
-                search_phrase = self._mergeFieldIntoTag(mergeString,self.bmw.col.get_note(nid))
+                search_phrase = self._merge_field_into_tag(merge_string,self.bmw.col.get_note(nid))
                 wf = wiki.Wikifame(self.bmw,nid,search_phrase=search_phrase)
                 wf.field_names["pageviews"] = self.fDict[0]["useFieldName"].text()
                 wf.field_names["article"] = self.fDict[0]["useFieldName"].text() + " (URL)"
@@ -190,142 +191,137 @@ class AddFameDialog(QDialog):
                 wf.project = "en.wikipedia.org"
                 sps.put(wf)
 
-            q_for_pageviews: queue.Queue[wiki.Wikifame] = queue.Queue()
+            buf_for_pageviews: queue.Queue[wiki.Wikifame] = queue.Queue()
             q_for_desc: queue.Queue[wiki.Wikifame] = queue.Queue()
             q_for_PV_ints: queue.Queue[wiki.Wikifame] = queue.Queue()
             q_for_article_strs: queue.Queue[wiki.Wikifame] = queue.Queue()
             q_for_desc_strs: queue.Queue[wiki.Wikifame] = queue.Queue()
             #list_for_desc: List[wiki.Wikifame] = []
             
-            # Multi-threaded query loop initialisation
-            executorSearch = concurrent.futures.ThreadPoolExecutor(max_workers=CONNECTIONS)
-            executorPV = concurrent.futures.ThreadPoolExecutor(max_workers=CONNECTIONS)
-            executorDesc = concurrent.futures.ThreadPoolExecutor(max_workers=CONNECTIONS)
-            busySearch = 0
-            busyPV = 0
-            busyDesc = 0
-            countDesc = 0
+            prog: int = 0                   # Progress for the progress bar
+            populated: int = 0              # The number of cards succesfully populated wih PVs
+            http_errs: int = 0              # The number of http errors during the process
+            no_arti_found_errs: int = 0     # The number of search phrases which resulted in 0 hits
+            future_requests: Dict = {}      # A dictionary mapping each future to a (executor, List[Wikifame]) tuple
             
-            prog = 0
-            populated = 0
-            errors = 0
-            future_requests = {}
-            descStrs = []
+            # Multi-threaded query loop initialisation
+            executor_search = concurrent.futures.ThreadPoolExecutor(max_workers=CONNECTIONS)
+            executor_pv = concurrent.futures.ThreadPoolExecutor(max_workers=CONNECTIONS)
+            executor_desc = concurrent.futures.ThreadPoolExecutor(max_workers=CONNECTIONS)
+            busy_search: int = 0
+            busy_pv: int = 0
+            busy_desc: int = 0
 
             # Multi-threaded query loop
-            while future_requests or not sps.empty() or not q_for_pageviews.empty() or not q_for_desc.empty():# or countDesc < len(self.nids):
+            while future_requests or not sps.empty() or not buf_for_pageviews.empty() or not q_for_desc.empty():
                 if progress.wasCanceled():
                     break
 
                 # IF (a) there are still searchPhrases and (b) it has been PER seconds since RATE searches ago and
                 # (c) there is a thread ready to receive work: THEN give that thread work.
-                while not sps.empty() and time.time() > searchTimes[searchNo % RATE] + PER * 1.01 and busySearch < CONNECTIONS:
-                    searchTimes[searchNo % RATE] = time.time()
-                    searchNo += 1
-                    busySearch += 1
+                while not sps.empty() and time.time() > search_times[search_no % RATE] + PER * 1.01 and busy_search < CONNECTIONS:
+                    search_times[search_no % RATE] = time.time()
+                    search_no += 1
+                    busy_search += 1
                     sp = sps.get()
-                    future_requests[executorSearch.submit(wiki.Wikifame.search_up_article,sp,timeout=TIMEOUT)] = (executorSearch, [sp])
+                    future_requests[executor_search.submit(wiki.Wikifame.search_up_article,sp,timeout=TIMEOUT)] = (executor_search, [sp])
 
+                
                 done, _ = concurrent.futures.wait(future_requests, timeout=0.01, return_when=concurrent.futures.FIRST_COMPLETED)
 
                 for future in done:
-                    res: Optional[Union[wiki.Wikifame, List[str]]] = future.result()
+                    er: bool = False
+                    try:
+                        res: Optional[Union[wiki.Wikifame, List[str], Exception]] = future.result()
+                    except requests.HTTPError and wiki.Wikifame.NoArticlesFound as err:
+                        if isinstance(err,requests.HTTPError):
+                            http_errs += 1
+                        if isinstance(err,wiki.Wikifame.NoArticlesFound):
+                            no_arti_found_errs += 1
+                        prog += 1
+                        progress.setValue(prog)
+                        er = True
                     exe, listWfs = future_requests[future]
-                    if exe == executorSearch:
-                        busySearch -= 1
-                        if res is None or isinstance(res, requests.HTTPError):
-                            errors += 1
-                            prog += 1
-                            progress.setValue(prog)
-                        else:
-                            q_for_pageviews.put(res)
+                    if exe == executor_search:
+                        busy_search -= 1
+                        if not er:
+                            buf_for_pageviews.put(res)
                             q_for_desc.put(res)
                             q_for_article_strs.put(res)
                             #list_for_desc.append(res)
-                    elif exe == executorPV:
-                        busyPV -= 1
-                        # note = self.bmw.col.get_note(nid)
-                        # self.bmw.col.update_note(note)
-                        if isinstance(res, requests.HTTPError):
-                            errors += 1
-                        else:
+                    elif exe == executor_pv:
+                        busy_pv -= 1
+                        if not er:
                             populated += 1
-                        q_for_PV_ints.put(res)
-                    elif exe == executorDesc:
-                        busyDesc -= 1
-                        q_for_desc_strs.put(res)
-                        # note = self.bmw.col.get_note(nid)
-                        # self.bmw.col.update_note(note)
-                        # print(res)
-                        # for j in range(len(res)):
-                        #     wfss: wiki.Wikifame = listWfs[j]
-                        #     wfss.fields["desc"] = res[j]
-                        #     wfss.note[wfss.field_names["desc"]] = str(res[j])
-                        #     self.bmw.col.update_note(wfss.note)
-                        #     print(wfss.field_names["desc"])
-                        #     print("2: "  +self.bmw.col.get_note(wfss.nid)[wfss.field_names["desc"]])
-                        #     print("2.1: "+self.bmw.col.get_note(self.nids[0])["Wiki Pageviews (Description)"])
-
+                            q_for_PV_ints.put(res)
+                    elif exe == executor_desc:
+                        busy_desc -= 1
+                        if not er:
+                            for j in range(len(listWfs)):
+                                listWfs[j].set("desc",res[j])
                     prog += 1
                     progress.setValue(prog)
                     del future_requests[future]
                     
                 # Same as top paragraph of loop for actual pageviews
-                while not q_for_pageviews.empty() and time.time() > pVTimes[pVNo % RATE] + PER * 1.01 and busyPV < CONNECTIONS:
-                    pVTimes[pVNo % RATE] = time.time()
-                    pVNo += 1
-                    busyPV += 1
-                    wf = q_for_pageviews.get()
-                    future_requests[executorPV.submit(wiki.Wikifame.fill_pageviews,wf,timeout=TIMEOUT)] = (executorPV, [wf])
+                while not buf_for_pageviews.empty() and time.time() > pv_times[pv_no % RATE] + PER * 1.01 and busy_pv < CONNECTIONS:
+                    pv_times[pv_no % RATE] = time.time()
+                    pv_no += 1
+                    busy_pv += 1
+                    wf = buf_for_pageviews.get()
+                    future_requests[executor_pv.submit(wiki.Wikifame.fill_pageviews,wf,timeout=TIMEOUT)] = (executor_pv, [wf])
 
                 # Same as top paragraph of loop for actual pageviews
-                while not q_for_desc.empty() and time.time() > descTimes[descNo % RATE] + PER * 1.01 and busyDesc < CONNECTIONS:
-                    descTimes[descNo % RATE] = time.time()
-                    descNo += 1
-                    busyDesc += 1
-                    wf = q_for_desc.get()
-                    future_requests[executorDesc.submit(wiki.Wikifame.fill_description,wf,timeout=TIMEOUT)] = (executorDesc, [wf])
+                # while not q_for_desc.empty() and time.time() > desc_times[desc_no % RATE] + PER * 1.01 and busy_desc < CONNECTIONS:
+                #     desc_times[desc_no % RATE] = time.time()
+                #     desc_no += 1
+                #     busy_desc += 1
+                #     wf = q_for_desc.get()
+                #     future_requests[executor_desc.submit(wiki.Wikifame.fill_description,wf,timeout=TIMEOUT)] = (executor_desc, [wf])
 
+                def b1() -> bool: return MAX_TITLES < q_for_desc.qsize()
+                def b2() -> bool: return not future_requests and sps.empty() and buf_for_pageviews.empty()
+                while (b1() or b2()) and time.time() > desc_times[desc_no % RATE] + PER * 1.01 and busy_desc < CONNECTIONS:
+                    desc_times[desc_no % RATE] = time.time()
+                    desc_no += 1
+                    busy_desc += 1
+                    l = min(MAX_TITLES, q_for_desc.qsize())
+                    list_for_desc: List[wiki.Wikifame] = []
+                    desc_strs: List[str] = []
+                    for j in range(l):
+                        wff = q_for_desc.get()
+                        arti = wff.fields["article"]
+                        if arti is not None:
+                            list_for_desc.append(wff)
+                            desc_strs.append(arti)
+                    future_requests[executor_desc.submit(wiki.get_desc,desc_strs,timeout=TIMEOUT)] = (executor_desc, list_for_desc)
 
-                # def b1() -> bool: return countDesc + MAX_TITLES < len(list_for_desc)
-                # def b2() -> bool: return not future_requests and sps.empty() and q_for_pageviews.empty() and countDesc < len(self.nids)
-                # while (b1() or b2()) and time.time() > descTimes[descNo % RATE] + PER * 1.01 and busyDesc < CONNECTIONS:
-                #     descTimes[descNo % RATE] = time.time()
-                #     descNo += 1
-                #     busyDesc += 1
-                #     k = countDesc
-                #     l = min(MAX_TITLES, len(list_for_desc)-k)
-                #     for j in range(countDesc, len(list_for_desc)):
-                #         descStrs.append(list_for_desc[j].fields["article"])
-                #     future_requests[executorDesc.submit(wiki.get_desc,descStrs[k:k+l],timeout=TIMEOUT)] = (executorDesc, list_for_desc[k:k+l])
-                #     countDesc += l
-
-            sleep(1)
+            #sleep(1)
 
             # Multi-threaded query loop clean-up
-            executorSearch.shutdown(wait = False, cancel_futures = True)
-            executorPV.shutdown(wait = False, cancel_futures = True)
-            executorDesc.shutdown(wait = False, cancel_futures = True)
+            executor_search.shutdown(wait = False, cancel_futures = True)
+            executor_pv.shutdown(wait = False, cancel_futures = True)
+            executor_desc.shutdown(wait = False, cancel_futures = True)
 
             # print(cleanedWfs)
             # print(cleanedStrs)
 
             # i = 0
             # while i < len(list_for_desc) or future_requests:
-            #     while i < len(list_for_desc) and time.time() > descTimes[descNo % RATE] + PER * 1.01 and busyDesc < CONNECTIONS:
+            #     while i < len(list_for_desc) and time.time() > desc_times[desc_no % RATE] + PER * 1.01 and busy_desc < CONNECTIONS:
             #         print("Entering Loop A")
-            #         descTimes[descNo % RATE] = time.time()
-            #         descNo += 1
-            #         busyDesc += 1
+            #         desc_times[desc_no % RATE] = time.time()
+            #         desc_no += 1
+            #         busy_desc += 1
             #         l = min(MAX_TITLES, len(list_for_desc)-i)
-            #         future_requests[executorDesc.submit(wiki.get_desc,cleanedStrs[i:i+l],timeout=TIMEOUT)] = cleanedWfs[i:i+l]
+            #         future_requests[executor_desc.submit(wiki.get_desc,cleanedStrs[i:i+l],timeout=TIMEOUT)] = cleanedWfs[i:i+l]
             #         i += MAX_TITLES
 
             #     done, _ = concurrent.futures.wait(future_requests, timeout=0.01, return_when=concurrent.futures.FIRST_COMPLETED)
 
             #     for future in done:
             #         print("Entering B")
-            #         busyDesc -= 1
+            #         busy_desc -= 1
             #         res: Optional[List[str]] = future.result()
             #         wfs: List[wiki.Wikifame] = future_requests[future]
             #         if res is not None:
@@ -351,20 +347,21 @@ class AddFameDialog(QDialog):
 
             # print("2.3: "+self.bmw.col.get_note(self.nids[0])["Wiki Pageviews (Description)"])
             # self.bmw.col.update_note(self.bmw.col.get_note(self.nids[0]))
-            # #executorDesc.shutdown(wait = False)
+            # #executor_desc.shutdown(wait = False)
             # print("2.4: "+self.bmw.col.get_note(self.nids[0])["Wiki Pageviews (Description)"])
 
             progress.setValue(progress.maximum())
 
-            msg = "Added Pageview data for {} out of {} selected notes. {} errors".format(populated,len(self.nids),errors)
-            print("2.5: "+self.bmw.col.get_note(self.nids[0])["Wiki Pageviews"])
-            print("2.5: "+self.bmw.col.get_note(self.nids[0])["Wiki Pageviews (Description)"])
+            msg = "Added Pageview data for {} out of {} selected notes. {} search phrases not found.  {} errors".format(
+                populated,len(self.nids),no_arti_found_errs,http_errs)
+            # print("2.5: "+self.bmw.col.get_note(self.nids[0])["Wiki Pageviews"])
+            # print("2.5: "+self.bmw.col.get_note(self.nids[0])["Wiki Pageviews (Description)"])
             showInfo(msg, textFormat="rich", parent=self)
-            print("2.6: "+self.bmw.col.get_note(self.nids[0])["Wiki Pageviews"])
-            print("2.6: "+self.bmw.col.get_note(self.nids[0])["Wiki Pageviews (Description)"])
+            # print("2.6: "+self.bmw.col.get_note(self.nids[0])["Wiki Pageviews"])
+            # print("2.6: "+self.bmw.col.get_note(self.nids[0])["Wiki Pageviews (Description)"])
 
             for nid in self.nids:
-                search_phrase = self._mergeFieldIntoTag(mergeString,self.bmw.col.get_note(nid))
+                search_phrase = self._merge_field_into_tag(merge_string,self.bmw.col.get_note(nid))
                 wf = wiki.Wikifame(self.bmw,nid,search_phrase=search_phrase)
                 wf.field_names["pageviews"] = self.fDict[0]["useFieldName"].text()
                 wf.field_names["article"] = self.fDict[0]["useFieldName"].text() + " (URL)"
@@ -374,46 +371,38 @@ class AddFameDialog(QDialog):
                 sps.put(wf)
 
             wf = sps.get()
-            # print("2.65: "+wf.fields["pageviews"])
-            # print("2.65: "+wf.fields["desc"])
 
         # while not q_for_article_strs.empty():
         #     wf = q_for_article_strs.get()
-        #     print("wf.field_names[\"article\"]: " + wf.field_names["article"])
-        #     print("str(wf.fields[\"article\"]): " + str(wf.fields["article"]))
         #     wf.note[wf.field_names["article"]] = str(wf.fields["article"])
         #     wf.mw.col.update_note(wf.note)
 
         # while not q_for_PV_ints.empty():
         #     wf = q_for_PV_ints.get()
-        #     print("wf.field_names[\"pageviews\"]: " + wf.field_names["pageviews"])
-        #     print("str(wf.fields[\"pageviews\"]): " + str(wf.fields["pageviews"]))
         #     wf.note[wf.field_names["pageviews"]] = str(wf.fields["pageviews"])
         #     wf.mw.col.update_note(wf.note)
 
-        # while not q_for_desc_strs.empty():
-        #     wf = q_for_desc_strs.get()
-        #     print("wf.field_names[\"desc\"]: " + wf.field_names["desc"])
-        #     print("str(wf.fields[\"desc\"]): " + str(wf.fields["desc"]))
-        #     wf.note[wf.field_names["desc"]] = str(wf.fields["desc"])
-        #     wf.mw.col.update_note(wf.note)
+        while not q_for_desc_strs.empty():
+            wf = q_for_desc_strs.get()
+            wf.note[wf.field_names["desc"]] = str(wf.fields["desc"])
+            wf.mw.col.update_note(wf.note)
 
         self.close()
 
-        print("2.7: "+self.bmw.col.get_note(self.nids[0])["Wiki Pageviews"])
-        print("2.7: "+self.bmw.col.get_note(self.nids[0])["Wiki Pageviews (Description)"])
+        # print("2.7: "+self.bmw.col.get_note(self.nids[0])["Wiki Pageviews"])
+        # print("2.7: "+self.bmw.col.get_note(self.nids[0])["Wiki Pageviews (Description)"])
 
         self.bmw.col.get_note(self.nids[0])["Wiki Pageviews (Description)"] = "HI!!"
         self.bmw.col.update_note(self.bmw.col.get_note(self.nids[0]))
-        print("2.8: "+self.bmw.col.get_note(self.nids[0])["Wiki Pageviews"])
-        print("2.8: "+self.bmw.col.get_note(self.nids[0])["Wiki Pageviews (Description)"])
+        # print("2.8: "+self.bmw.col.get_note(self.nids[0])["Wiki Pageviews"])
+        # print("2.8: "+self.bmw.col.get_note(self.nids[0])["Wiki Pageviews (Description)"])
 
-    def _setupUi(self) -> None:
+    def _setup_ui(self) -> None:
         """
         Sets up the UI for the Add Fame dialog.
         """
 
-        def _insertField(i: int) -> None:
+        def _insert_field(i: int) -> None:
             """
             Inserts the selected field wrapped in "{{ }}" to act as a merge tag.
 
@@ -425,16 +414,16 @@ class AddFameDialog(QDialog):
                 self.fDict[i]["insertSelect"].setCurrentIndex(0)
             self.fDict[i]["edit"].setFocus()
 
-        def _updateExample(i: int) -> None:
+        def _update_example(i: int) -> None:
             """
             Generate and update the "Example" string under the textbox by merging with merge tags.
 
             :param i: 0 = Wiki, 1 = Google
             """
 
-            mergeString = self.fDict[i]["edit"].toPlainText()
+            merge_string = self.fDict[i]["edit"].toPlainText()
             note = mw.col.get_note(self.nid)
-            msg = "<b>Example:</b> " + self._mergeFieldIntoTag(mergeString, note)
+            msg = "<b>Example:</b> " + self._merge_field_into_tag(merge_string, note)
             self.fDict[i]["example"].setTextFormat(Qt.RichText)
             self.fDict[i]["example"].setText(msg)
         
@@ -472,7 +461,7 @@ class AddFameDialog(QDialog):
                         if True:
                             fd["insertSelect"] = QComboBox()
                             fd["insertSelect"].addItems(["SELECT FIELD"] + self.fields)
-                            fd["insertSelect"].currentIndexChanged.connect(lambda _, x = i: _insertField(x))
+                            fd["insertSelect"].currentIndexChanged.connect(lambda _, x = i: _insert_field(x))
                         fd["insertField"].addRow(QLabel("Insert field:"), fd["insertSelect"])
                         fd["edit"] = QPlainTextEdit()
                         if TESTING and i == 0:
@@ -484,37 +473,37 @@ class AddFameDialog(QDialog):
                         if True:
                             fd["useFieldName"] = QLineEdit()
                             fd["useFieldName"].setText(fd["newFieldPlaceholder"])
-                            #fd["useFieldName"].currentIndexChanged.connect(lambda _, x = i: _insertField(x))
+                            #fd["useFieldName"].currentIndexChanged.connect(lambda _, x = i: _insert_field(x))
                         fd["useField"].addRow(QLabel("Add Fame into Field:"), fd["useFieldName"])
                     fd["vbox"].addLayout(fd["insertField"])
                     fd["vbox"].addWidget(fd["edit"])
                     fd["vbox"].addWidget(fd["example"])
                     fd["vbox"].addLayout(fd["useField"])
                 fd["gb"].setLayout(fd["vbox"])
-                fd["edit"].textChanged.connect(lambda x = i: _updateExample(x))
+                fd["edit"].textChanged.connect(lambda x = i: _update_example(x))
 
-            buttonBox = QDialogButtonBox(Qt.Horizontal, self)
-            doneButton = buttonBox.addButton(QDialogButtonBox.StandardButton.Ok)
-            cancelButton = buttonBox.addButton(QDialogButtonBox.StandardButton.Cancel)
-            helpButton = buttonBox.addButton(QDialogButtonBox.StandardButton.Help)
-            doneButton.setToolTip("Begin adding fame...")
-            doneButton.clicked.connect(lambda _: self.accept())
-            cancelButton.clicked.connect(self.reject)
+            button_box = QDialogButtonBox(Qt.Horizontal, self)
+            done_button = button_box.addButton(QDialogButtonBox.StandardButton.Ok)
+            cancel_button = button_box.addButton(QDialogButtonBox.StandardButton.Cancel)
+            help_button = button_box.addButton(QDialogButtonBox.StandardButton.Help)
+            done_button.setToolTip("Begin adding fame...")
+            done_button.clicked.connect(lambda _: self.accept())
+            cancel_button.clicked.connect(self.reject)
 
         main_vbox.addLayout(ivbox)
         main_vbox.addWidget(self.fDict[0]["gb"])
-        main_vbox.addWidget(self.fDict[1]["gb"])
-        main_vbox.addWidget(buttonBox)
+        #main_vbox.addWidget(self.fDict[1]["gb"])
+        main_vbox.addWidget(button_box)
 
         self.setLayout(main_vbox)
         self.fDict[0]["edit"].setFocus()
         self.setMinimumWidth(540)
         self.setMinimumHeight(550)
-        self.resize(540,550)
+        self.resize(540,330)
         self.setWindowTitle("Add Fame...")
 
 
-def addFame(browser) -> None:
+def add_fame(browser) -> None:
     nids = browser.selectedNotes()
     if not nids:
         tooltip("No cards selected.")
@@ -522,7 +511,7 @@ def addFame(browser) -> None:
     dialog = AddFameDialog(browser, nids)
     dialog.exec_()
 
-def orderNotes(browser) -> None:
+def order_notes(browser) -> None:
     nids = browser.selectedNotes()
     if not nids:
         tooltip("No cards selected.")
@@ -531,19 +520,19 @@ def orderNotes(browser) -> None:
     # dialog = AddFameDialog(browser, nids)
     # dialog.exec_()
 
-def setupMenu(browser : QMainWindow) -> None:
+def setup_menu(browser : QMainWindow) -> None:
     menu = browser.form.menu_Notes
     menu.addSeparator()
 
     # Setup a new menu item, "Add Fame..."
-    addFameAction = QAction("Add Fame...", mw)
-    menu.addAction(addFameAction)
-    qconnect(addFameAction.triggered, lambda: addFame(browser))
+    add_fameAction = QAction("Add Fame...", mw)
+    menu.addAction(add_fameAction)
+    qconnect(add_fameAction.triggered, lambda: add_fame(browser))
 
     # Setup a new menu item, "Order Notes..."
-    addFameAction = QAction("Order Notes by...", mw)
-    menu.addAction(addFameAction)
-    qconnect(addFameAction.triggered, lambda: orderNotes(browser))
+    add_fameAction = QAction("Order Notes by...", mw)
+    menu.addAction(add_fameAction)
+    qconnect(add_fameAction.triggered, lambda: order_notes(browser))
 
-gui_hooks.browser_menus_did_init.append(setupMenu)
+gui_hooks.browser_menus_did_init.append(setup_menu)
 

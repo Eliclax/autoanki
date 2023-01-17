@@ -8,9 +8,19 @@ from urllib.parse import unquote
 from time import sleep
 
 # If running this module by itself for dev purposes, you can change the verbosity by changing the "v: int = 1" line
-verbose: int = 0
 v: int = 1
 
+def printv(ver: int = 0, *args, **kwargs) -> None:
+    """
+    A wrapper function for printing for different verbostiies
+
+    :param ver: The minimum verbosity to print at
+    """
+
+    if verbose >= ver:
+        print(*args, **kwargs)
+
+verbose: int = 1
 headers = {'User-Agent': 'AutoankiBot/0.1 (https://github.com/Eliclax/autoanki; tw2000x@gmail.com)'}
 
 if __name__ == "__main__":
@@ -23,6 +33,11 @@ else:
 
         from anki.notes import Note, NoteId
         from aqt import AnkiQt
+
+        class NoArticlesFound(Exception):
+            """
+            An exception indicating that no article was found via Wiki search.
+            """
 
         def __init__(
             self,
@@ -91,11 +106,17 @@ else:
                 raise Exception
             try:
                 article = search_article_url(self.search_phrase, timeout)
+                if article is None:
+                    self.set("article","ERROR: No Articles Found")
+                    self.set("article_fixed","ERROR: No Articles Found")
+                    raise Wikifame.NoArticlesFound
                 self.set("article",article)
                 self.set("article_fixed",article)
             except requests.HTTPError:
                 self.set("article","ERROR: HTTP Error")
                 self.set("article_fixed","ERROR: HTTP Error")
+                raise
+            except Wikifame.NoArticlesFound:
                 raise
             return self
 
@@ -149,8 +170,7 @@ def search_article_url(search_phrase: str, timeout: float = 5) -> Optional[str]:
         article = os.path.basename(parse.urlparse(contents[3][0]).path)
     except:
         article = None
-    if verbose >= 1:
-        print("   > Searched: {} -> {}".format(search_phrase, article))
+    printv(1, "   > Searched: {} -> {}".format(search_phrase, article))
     return article
 
 def get_pageviews(
@@ -190,12 +210,10 @@ def get_pageviews(
         except requests.HTTPError:
             raise
         contents: str = resp.json()
-        if verbose >= 2:
-            print(json.dumps(contents, indent=4))
+        printv(3, json.dumps(contents, indent=4))
         for item in contents["items"]:
             pageviews += item["views"]
-    if verbose >= 1:
-        print("   > Queried: {:14d} | {}".format(pageviews, article))
+        printv(1, "   > Queried: {:14d} | {}".format(pageviews, article))
     return pageviews
 
 def get_desc1(article: Optional[str], timeout: float = 5) -> str:
@@ -219,8 +237,7 @@ def get_desc1(article: Optional[str], timeout: float = 5) -> str:
             desc = contents["query"]["pages"][page]["description"]
     except:
         desc = "ERROR: No short description found."
-    if verbose >= 1:
-        print("   > Desc: {} -> {}".format(article, desc))
+    printv(2, "   > Desc: {} -> {}".format(article, desc))
     return desc
 
 
@@ -250,16 +267,14 @@ def get_desc(articles: List[Optional[str]] = [], timeout: float = 5) -> List[str
             normed[j] = unquote(normed[j])
 
         try:
-            if verbose >= 1:
-                print(contents["query"]["normalized"])
-                print(normed)
+            printv(2, contents["query"]["normalized"])
+            printv(2, normed)
             for j in range(len(normed)):
                 for norm in contents["query"]["normalized"]:
                     if normed[j] == norm["from"]:
                         normed[j] = norm["to"]
         except KeyError:
-            if verbose >= 1:
-                print("Encountered KeyError")
+            printv(2, "Encountered KeyError")
             pass
 
         for j in range(l):
@@ -271,7 +286,7 @@ def get_desc(articles: List[Optional[str]] = [], timeout: float = 5) -> List[str
                         descs[i+j] = "ERROR: No short description found."
     if verbose >= 1:
         for i in range(len(articles)):
-            print("   > Got description: {} | {} | {}".format(articles[i], normed[i], descs[i]))
+            printv(1, "   > Got description: {} | {} | {}".format(articles[i], normed[i], descs[i]))
     return descs
 
 if __name__ == "__main__":
