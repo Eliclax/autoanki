@@ -1,11 +1,11 @@
 from copy import deepcopy
 import json
 import os
+from importlib_metadata import re
 import requests
 from typing import Union, Dict, List, Optional
 from urllib import parse
 from urllib.parse import unquote
-from time import sleep
 
 # If running this module by itself for dev purposes, you can change the verbosity by changing the "v: int = 1" line
 v: int = 1
@@ -33,11 +33,22 @@ else:
 
         from anki.notes import Note, NoteId
         from aqt import AnkiQt
+        from aqt.utils import showCritical
 
-        class NoArticlesFound(Exception):
-            """
-            An exception indicating that no article was found via Wiki search.
-            """
+        class WikipediaError(Exception):
+            """Generic error for ones returned by Wikipedia API"""
+            def __init__(self, error: str = "", url: str = "", message: str = "Wikipedia Query Error"):
+                self.error = error
+                self.message = message
+                self.url = url
+                try:
+                    self.dump = json.dump(error,indent=4)
+                except:
+                    self.dump = error
+                super().__init__(f"{self.message}\n\nERROR: {self.dump}\n\nURL: {self.url}")
+
+        class NoArticlesFound(WikipediaError):
+            """An exception indicating that no article was found via Wiki search."""
 
         def __init__(
             self,
@@ -45,15 +56,13 @@ else:
             nid: Optional[NoteId] = None,
             note: Optional[Note] = None,
             search_phrase: Optional[str] = None,
-            pageviews_field_name: Optional[str] = None,
+            project: Optional[str] = None,
+            article: Optional[str] = None,
+            desc: Optional[str] = None,
             pageviews: Optional[int] = None,
             article_field_name: Optional[str] = None,
-            article: Optional[str] = None,
-            article_fixed_field_name: Optional[str] = None,
-            article_fixed: Optional[str] = None,
             desc_field_name: Optional[str] = None,
-            desc: Optional[str] = None,
-            project: Optional[str] = None,
+            pageviews_field_name: Optional[str] = None,
             ) -> None:
             """
             Must contain search_phrase or article
@@ -68,14 +77,12 @@ else:
                 self.note = self.mw.col.get_note(self.nid)
             self.search_phrase = search_phrase
             self.project = project
-            self.fields: Dict = {}
+            self.fields: Dict[str,str] = {}
             self.fields["article"] = article
-            self.fields["article_fixed"] = article_fixed
             self.fields["desc"] = desc
             self.fields["pageviews"] = pageviews
-            self.field_names: Dict = {}
+            self.field_names: Dict[str,str] = {}
             self.field_names["article"] = article_field_name
-            self.field_names["article_fixed"] = article_fixed_field_name
             self.field_names["desc"] = desc_field_name
             self.field_names["pageviews"] = pageviews_field_name
 
@@ -83,7 +90,7 @@ else:
             """
             Sets the python field and the Anki field to be equal to value.
 
-            :param field: The name of the field, must be one of: article, article_fixed, desc, pageviews
+            :param field: The name of the field, must be one of: article, desc, pageviews
             :param value: The value to set the field as
             """
 
@@ -97,24 +104,20 @@ else:
 
         def search_up_article(self, timeout: float = 5) -> 'Wikifame':
             """
-            If self.search_phrase is populated, this populates "article" and "article_fixed"
+            If self.search_phrase is populated, this populates "article"
             """
 
             if self.search_phrase is None:
                 self.set("article","ERROR: No Search Phrase")
-                self.set("article_fixed","ERROR: No Search Phrase")
                 raise Exception
             try:
                 article = search_article_url(self.search_phrase, timeout)
                 if article is None:
                     self.set("article","ERROR: No Articles Found")
-                    self.set("article_fixed","ERROR: No Articles Found")
                     raise Wikifame.NoArticlesFound
                 self.set("article",article)
-                self.set("article_fixed",article)
             except requests.HTTPError:
                 self.set("article","ERROR: HTTP Error")
-                self.set("article_fixed","ERROR: HTTP Error")
                 raise
             except Wikifame.NoArticlesFound:
                 raise
@@ -125,12 +128,17 @@ else:
             If "article" is populated, this populates "pageviews"
             """
 
+            rem = re.search(r"(\|[^\|\n]*)$|([^\|\n]+)$",self.fields["article"])
+            if rem is None:
+                article = self.fields["article"][rem.span()[0]:rem.span()[1]].replace("|","").replace(" ","")
+                return self
+            article = self.fields["article"][rem.span()[0]:rem.span()[1]].replace("|","").replace(" ","")
             try:
-                pageviews = get_pageviews(self.fields["article"], self.project, timeout=timeout)
-                self.set("pageviews",pageviews)
+                pageviews = get_pageviews(article, self.project, timeout=timeout)
             except requests.HTTPError:
                 self.set("pageviews","ERROR: HTTP Error")
                 raise
+            self.set("pageviews",pageviews)
             return self
 
         def fill_description(self, timeout: float = 5) -> 'Wikifame':
@@ -140,12 +148,17 @@ else:
 
             # if self.fields["article"] is None:
             #     self.search_up_article(timeout=timeout)
+
+            rem = re.search(r"(\|[^\|\n]*)$|([^\|\n]+)$",self.fields["article"])
+            if rem is None:
+                return self
+            article = self.fields["article"][rem.span()[0]:rem.span()[1]].replace("|","").replace(" ","")
             try:
-                desc = get_desc1(self.fields["article"], timeout=timeout)
-                self.set("desc", desc)
+                desc = get_desc([article], timeout=timeout)[0]
             except requests.HTTPError:
-                self.set("desc", "ERROR: HTTP Error")
+                self.set("desc","ERROR: HTTP Error")
                 raise
+            self.set("desc",desc)
             return self
 
 def search_article_url(search_phrase: str, timeout: float = 5) -> Optional[str]:
@@ -200,6 +213,7 @@ def get_pageviews(
     if article is None:
         return 0
 
+    article = article.replace("|","").replace(" ","")
     pageviews = 0
     if article != "":
         wiki_url = "https://wikimedia.org/api/rest_v1/metrics/pageviews/per-article/"
@@ -216,30 +230,6 @@ def get_pageviews(
         printv(1, "   > Queried: {:14d} | {}".format(pageviews, article))
     return pageviews
 
-def get_desc1(article: Optional[str], timeout: float = 5) -> str:
-    """
-    Given a single article titles, returns a single short descriptions.
-    
-    :param article: The title of any article in en.wikipedia.org. Any spaces should be replaced with underscores. It also should be URI-encoded, so that non-URI-safe characters like %, / or ? are accepted. Example: Are_You_the_One%3F.
-    :param timeout: How many seconds to wait for the server to send data before giving up.
-    :return: The list of short descriptions
-    """
-
-    search_url = "https://en.wikipedia.org/w/api.php?format=json&action=query&prop=description&titles={}".format(article)
-    try:
-        resp = requests.get(search_url, headers=headers, timeout=timeout)
-        resp.raise_for_status()
-    except requests.HTTPError:
-        raise
-    try:
-        contents: str = resp.json()
-        for page in contents["query"]["pages"]:
-            desc = contents["query"]["pages"][page]["description"]
-    except:
-        desc = "ERROR: No short description found."
-    printv(2, "   > Desc: {} -> {}".format(article, desc))
-    return desc
-
 
 def get_desc(articles: List[Optional[str]] = [], timeout: float = 5) -> List[str]:
     """
@@ -251,6 +241,7 @@ def get_desc(articles: List[Optional[str]] = [], timeout: float = 5) -> List[str
     """
 
     descs: List[str] = [""] * len(articles)
+    articles = [arti.replace("|","").replace(" ","") for arti in articles]
 
     for i in range(0, len(articles), 50):
         l = min(50, len(articles)-i)
@@ -260,7 +251,7 @@ def get_desc(articles: List[Optional[str]] = [], timeout: float = 5) -> List[str
             resp = requests.get(url, headers=headers, timeout=timeout)
         except requests.HTTPError:
             raise
-        contents: json = resp.json()
+        contents: json = resp.json()        
         normed: List[str] = deepcopy(articles[i:i+l])
 
         for j in range(len(normed)):
@@ -274,7 +265,11 @@ def get_desc(articles: List[Optional[str]] = [], timeout: float = 5) -> List[str
                     if normed[j] == norm["from"]:
                         normed[j] = norm["to"]
         except KeyError:
-            printv(2, "Encountered KeyError")
+            try:
+                error = contents["error"]
+                raise Wikifame.WikipediaError(error,url)
+            except KeyError:
+                printv(2, "Encountered KeyError")
             pass
 
         for j in range(l):
@@ -295,5 +290,5 @@ if __name__ == "__main__":
     get_pageviews("Donald_Trump")
     search_article_url("Noodles")
     get_pageviews(search_article_url("Stoke on Trent"))
-    get_desc1("Apple")
+    get_desc(["Apple"])[0]
     get_desc(["A","B","ILEUFLIDWUF","D","are_You_the_One%3F","Joe_Biden","WLIEHUFDWLIUHF"])
