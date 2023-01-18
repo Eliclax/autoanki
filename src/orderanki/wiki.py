@@ -231,57 +231,62 @@ def get_pageviews(
     return pageviews
 
 
-def get_desc(articles: List[Optional[str]] = [], timeout: float = 5) -> List[str]:
+def get_desc(articles: List[str] = [], project: str = "en.wikipedia.org", timeout: float = 5) -> List[str]:
     """
-    Given a list of article titles, returns a list of short descriptions. (Makes ceil(n/50) queries to Wikipedia.)
+    Given a list of article titles, returns a list of short descriptions, respectively. (Makes ceil(n/50) queries to Wikipedia.)
     
     :param articles: The list of titles of any article in the specified project. Any spaces should be replaced with underscores. It also should be URI-encoded, so that non-URI-safe characters like %, / or ? are accepted. Example: Are_You_the_One%3F.
     :param timeout: How many seconds to wait for the server to send data before giving up.
     :return: The list of short descriptions
     """
 
+    MAX_TITLES = 50
     descs: List[str] = [""] * len(articles)
-    articles = [arti.replace("|","").replace(" ","") for arti in articles]
 
-    for i in range(0, len(articles), 50):
-        l = min(50, len(articles)-i)
-        url = "https://en.wikipedia.org/w/api.php?format=json&action=query&prop=description&titles="
-        url += '|'.join([a for a in articles[i:i+l] if a is not None])
+    if len(articles) > MAX_TITLES:
+        printv(1, f"Warning: Making {len(articles)//MAX_TITLES} unthrottled queries for short descriptions.")
+
+    for i in range(0, len(articles), MAX_TITLES):
+        l = min(MAX_TITLES, len(articles)-i)
+        url = "https://{}/w/api.php?format=json&action=query&prop=description&redirects&".format(project)
+        url += "titles=" + '|'.join(articles[i:i+l])
         try:
             resp = requests.get(url, headers=headers, timeout=timeout)
+            resp.raise_for_status()
         except requests.HTTPError:
             raise
         contents: json = resp.json()        
-        normed: List[str] = deepcopy(articles[i:i+l])
+        redir: List[str] = [unquote(arti) for arti in articles[i:i+l]]
 
-        for j in range(len(normed)):
-            normed[j] = unquote(normed[j])
-
-        try:
-            printv(2, contents["query"]["normalized"])
-            printv(2, normed)
-            for j in range(len(normed)):
+        if "query" in contents:
+            if "normalized" in contents["query"]:
                 for norm in contents["query"]["normalized"]:
-                    if normed[j] == norm["from"]:
-                        normed[j] = norm["to"]
-        except KeyError:
-            try:
-                error = contents["error"]
-                raise Wikifame.WikipediaError(error,url)
-            except KeyError:
-                printv(2, "Encountered KeyError")
-            pass
+                    for j in range(len(redir)):
+                        if redir[j] == norm["from"]:
+                            redir[j] = norm["to"]
+            if "redirects" in contents["query"]:
+                for norm in contents["query"]["redirects"]:
+                    for j in range(len(redir)):
+                        if redir[j] == norm["from"]:
+                            redir[j] = norm["to"]
+            if "pages" in contents["query"]:
+                for j in range(l):
+                    for page in contents["query"]["pages"]:
+                        if redir[j] == contents["query"]["pages"][page]["title"]:
+                            if "invalid" in contents["query"]["pages"][page]:
+                                descs[i+j] = "ERROR: "+contents["query"]["pages"][page]["invalidreason"]
+                            elif "missing" in contents["query"]["pages"][page]:
+                                descs[i+j] = "ERROR: \""+contents["query"]["pages"][page]["title"]+"\" missing."
+                            else:
+                                descs[i+j] = contents["query"]["pages"][page]["description"]
+                    if descs[i+j] == "":
+                        descs[i+j] = "ERROR: Page not found in response"
+        else:
+            raise Wikifame.WikipediaError(contents["error"],url)
 
-        for j in range(l):
-            for page in contents["query"]["pages"]:
-                if normed[j] == contents["query"]["pages"][page]["title"]:
-                    try:
-                        descs[i+j] = contents["query"]["pages"][page]["description"]
-                    except:
-                        descs[i+j] = "ERROR: No short description found."
     if verbose >= 1:
         for i in range(len(articles)):
-            printv(1, "   > Got description: {} | {} | {}".format(articles[i], normed[i], descs[i]))
+            printv(1, "   > Got description: {} | {} | {}".format(articles[i], redir[i], descs[i]))
     return descs
 
 if __name__ == "__main__":
@@ -291,4 +296,4 @@ if __name__ == "__main__":
     search_article_url("Noodles")
     get_pageviews(search_article_url("Stoke on Trent"))
     get_desc(["Apple"])[0]
-    get_desc(["A","B","ILEUFLIDWUF","D","are_You_the_One%3F","Joe_Biden","WLIEHUFDWLIUHF"])
+    get_desc(["A","9_(number)","ILEUFLIDWUF","D","are_You_the_One%3F","Joe_Biden","WLIEHFW","6_{number)"])
