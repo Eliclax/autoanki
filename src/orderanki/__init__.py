@@ -136,7 +136,7 @@ class AddFameDialog(QDialog):
             self.mm.add_field(self.model, f)
 
             def on_done(changes: OpChanges) -> None:
-                # tooltip("New field \"" + self.wfd_ui_dict["new_field_name_editor"].text() + "\" added.", parent=self.parentWidget())
+                # tooltip("New field \"" + self.ui_new_field_name_editor"].text() + "\" added.", parent=self.parentWidget())
                 QDialog.accept(self)
 
             update_notetype_legacy(parent=self.bmw, notetype=self.model).success(on_done).run_in_background()
@@ -157,7 +157,7 @@ class AddFameDialog(QDialog):
             if len(fields) >= 3: return "fields \"" + "\", \"".join(fields[0:-1]) + f"\", and \"{fields[-1]}\""
 
         # Add necessary fields
-        fn = self.wfd_ui_dict["new_field_name_editor"].text()
+        fn = self.ui_new_field_name_editor.text()
         field_names_new: Dict[str, str] = {"pageviews": fn, "article": fn+" (URL)", "desc": fn + " (Description)"}
         field_names_old: List[str] = self._get_fields()
         fields_added: List[str] = []
@@ -200,7 +200,7 @@ class AddFameDialog(QDialog):
 
         # Popoulating the search phrases queue in prep for loop
         sps: queue.Queue[wiki.Wikifame] = queue.Queue()
-        merge_string = self.wfd_ui_dict["merge_string_editor"].toPlainText()
+        merge_string = self.ui_merge_string_editor.toPlainText()
         for nid in self.nids:
             search_phrase = self._merge_field_into_tag(merge_string,self.bmw.col.get_note(nid))
             wf = wiki.Wikifame(self.bmw,nid,search_phrase=search_phrase)
@@ -233,15 +233,15 @@ class AddFameDialog(QDialog):
         # Tracks the total number of queries made of each type
         query_no: Dict[concurrent.futures.ThreadPoolExecutor, int] = {
             exe_se: 0, exe_pv: 0, exe_desc: 0}
-            
+
         # Tracking the number of busy workers
         busy_exe: Dict[concurrent.futures.ThreadPoolExecutor,int] = {
             exe_se: 0, exe_pv: 0, exe_desc: 0}    
 
         # Multi-threaded query loop
-        #   Search phrases -> Article URLs
-        #   Article URLs -> Pageviews
-        #   Article URLs -> Article Short Descriptions
+        #   Search phrase -> Possible Article URLs (MediaWiki API)
+        #   Possible Article URLs -> Short Descriptions -> Get "correct" URL and description (MediaWiki API)
+        #   Correct Article URL -> Pageview (REST API)
         while future_requests or not sps.empty() or not buf_for_pageviews.empty() or not q_for_desc.empty():
             if progress.wasCanceled():
                 break
@@ -346,78 +346,80 @@ class AddFameDialog(QDialog):
             Inserts the selected field wrapped in "{{ }}" to act as a merge tag.
             """
 
-            if self.wfd_ui_dict["merge_tag_selector"].currentIndex() != 0:
-                self.wfd_ui_dict["merge_string_editor"].insertPlainText("{{"+self.wfd_ui_dict["merge_tag_selector"].currentText()+"}}")
-                self.wfd_ui_dict["merge_tag_selector"].setCurrentIndex(0)
-            self.wfd_ui_dict["merge_string_editor"].setFocus()
+            if ui_merge_tag_selector.currentIndex() != 0:
+                self.ui_merge_string_editor.insertPlainText("{{"+ui_merge_tag_selector.currentText()+"}}")
+                ui_merge_tag_selector.setCurrentIndex(0)
+            self.ui_merge_string_editor.setFocus()
 
         def _update_merged_string_example() -> None:
             """
             Generate and update the "Example" string under the textbox by merging with merge tags.
             """
 
-            merge_string = self.wfd_ui_dict["merge_string_editor"].toPlainText()
+            merge_string = self.ui_merge_string_editor.toPlainText()
             note = mw.col.get_note(self.nid)
             msg = "<b>Example:</b> " + self._merge_field_into_tag(merge_string, note)
-            self.wfd_ui_dict["merged_string_example"].setTextFormat(Qt.RichText)
-            self.wfd_ui_dict["merged_string_example"].setText(msg)
+            ui_merge_string_example.setTextFormat(Qt.RichText)
+            ui_merge_string_example.setText(msg)
         
-        main_vbox = QVBoxLayout()
+        ui_main_vbox = QVBoxLayout()
         if True:
-            ivbox = QVBoxLayout()
-            desc_msg = "Add fields containing the number of Wikipedia pageviews "
-            desc_msg+= "for an article (the first that Wikipedia search returns)."
-            desc = QLabel(desc_msg)
-            desc.setWordWrap(True)
-            ivbox.addWidget(desc)
-            selno = QLabel("<b>Notes selected:</b> " + str(len(self.nids)))
-            ivbox.addWidget(selno)
-
-            self.wfd_ui_dict = {}
-            self.wfd_ui_dict["gb_name"] = "Get Wikipedia pageviews"
-            self.wfd_ui_dict["new_field_placeholder"] = "Wiki Pageviews"
-
-            ui = self.wfd_ui_dict
-            ui["vbox"] = QVBoxLayout()
             if True:
-                ui["merge_tag_selector_text"] = QFormLayout()
+                ui_desc_msg = "Add fields containing the number of Wikipedia pageviews "
+                ui_desc_msg+= "for an article (the first that Wikipedia search returns)."
+            ui_desc = QLabel(ui_desc_msg)
+            ui_desc.setWordWrap(True)
+
+            ui_selno = QLabel("<b>Notes selected:</b> " + str(len(self.nids)))
+            
+            ui_gbox = QGroupBox("Merge String")
+            ui_gbox.setCheckable(True)
+            if True:
+                ui_gbvbox = QVBoxLayout()
                 if True:
-                    ui["merge_tag_selector"] = QComboBox()
-                    ui["merge_tag_selector"].addItems(["SELECT FIELD"] + self.fields)
-                    ui["merge_tag_selector"].currentIndexChanged.connect(_insert_merge_tag)
-                ui["merge_tag_selector_text"].addRow(QLabel("Insert field:"), ui["merge_tag_selector"])
-                ui["merge_string_editor"] = QPlainTextEdit()
+                    ui_merge_tag_selector_form = QFormLayout()
+                    if True:
+                        ui_merge_tag_selector = QComboBox()
+                        ui_merge_tag_selector.addItems(["SELECT FIELD"] + self.fields)
+                        ui_merge_tag_selector.currentIndexChanged.connect(_insert_merge_tag)
+                    ui_merge_tag_selector_form.addRow(QLabel("Insert field:"), ui_merge_tag_selector)
+                    self.ui_merge_string_editor = QPlainTextEdit()
+                    self.ui_merge_string_editor.textChanged.connect(_update_merged_string_example)
+                    ui_merge_string_example = QLabel("<b>Example:</b> ")
+                    ui_merge_string_example.setWordWrap(True)
+                ui_gbvbox.addLayout(ui_merge_tag_selector_form)
+                ui_gbvbox.addWidget(self.ui_merge_string_editor)
+                ui_gbvbox.addWidget(ui_merge_string_example)
+            ui_gbox.setLayout(ui_gbvbox)
 
-                ui["merged_string_example"] = QLabel("<b>Example:</b> ")
-                ui["merged_string_example"].setWordWrap(True)
-                ui["new_field_name_form"] = QFormLayout()
-                if True:
-                    ui["new_field_name_editor"] = QLineEdit()
-                    ui["new_field_name_editor"].setText(ui["new_field_placeholder"])
-                ui["new_field_name_form"].addRow(QLabel("Add Fame into Field:"), ui["new_field_name_editor"])
-            ui["vbox"].addLayout(ui["merge_tag_selector_text"])
-            ui["vbox"].addWidget(ui["merge_string_editor"])
-            ui["vbox"].addWidget(ui["merged_string_example"])
-            ui["vbox"].addLayout(ui["new_field_name_form"])
-            ui["merge_string_editor"].textChanged.connect(_update_merged_string_example)
+            ui_misc_form = QFormLayout()
+            if True:
+                self.keyword_editor = QLineEdit()
+                self.ui_new_field_name_editor = QLineEdit()
+                self.ui_new_field_name_editor.setText("Wiki Pageviews")
+            ui_misc_form.addRow(QLabel("Keywords (comma separated):"), self.keyword_editor)
+            ui_misc_form.addRow(QLabel("Add Fame into Field:"), self.ui_new_field_name_editor)
 
-            button_box = QDialogButtonBox(Qt.Horizontal, self)
-            done_button = button_box.addButton(QDialogButtonBox.StandardButton.Ok)
-            cancel_button = button_box.addButton(QDialogButtonBox.StandardButton.Cancel)
-            help_button = button_box.addButton(QDialogButtonBox.StandardButton.Help)
-            done_button.setToolTip("Begin adding fame...")
-            done_button.clicked.connect(lambda _: self.accept())
-            cancel_button.clicked.connect(self.reject)
+            ui_button_box = QDialogButtonBox(Qt.Horizontal, self)
+            if True:
+                ui_done_button = ui_button_box.addButton(QDialogButtonBox.StandardButton.Ok)
+                ui_cancel_button = ui_button_box.addButton(QDialogButtonBox.StandardButton.Cancel)
+                ui_help_button = ui_button_box.addButton(QDialogButtonBox.StandardButton.Help)
+                ui_done_button.setToolTip("Begin adding fame...")
+                ui_done_button.clicked.connect(self.accept)
+                ui_cancel_button.clicked.connect(self.reject)
 
-        main_vbox.addLayout(ivbox)
-        main_vbox.addLayout(self.wfd_ui_dict["vbox"])
-        main_vbox.addWidget(button_box)
+        ui_main_vbox.addWidget(ui_desc)
+        ui_main_vbox.addWidget(ui_selno)
+        ui_main_vbox.addWidget(ui_gbox)
+        ui_main_vbox.addLayout(ui_misc_form)
+        ui_main_vbox.addWidget(ui_button_box)
 
-        self.setLayout(main_vbox)
-        self.wfd_ui_dict["merge_string_editor"].setFocus()
+        self.setLayout(ui_main_vbox)
+        self.ui_merge_string_editor.setFocus()
         self.setMinimumWidth(540)
-        self.setMinimumHeight(230)
-        self.resize(540,100)
+        self.setMinimumHeight(330)
+        self.resize(540,300)
         self.setWindowTitle("Add Fame...")
 
 
