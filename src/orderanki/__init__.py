@@ -149,6 +149,15 @@ class AddFameDialog(QDialog):
             self._handle_network_error(err)
             return
 
+        # Check if the lang_code is valid
+        try:
+            requests.get(f"https://{self.ui_lang_code_QLineEdit.text()}.wikipedia.org")
+        except requests.HTTPError as err:
+            self._handle_network_error(err)
+            return
+
+
+
         # Proper English phrasing for fields
         def fields_listing(fields: List[str]) -> str:
             if len(fields) == 0: return ""
@@ -157,8 +166,9 @@ class AddFameDialog(QDialog):
             if len(fields) >= 3: return "fields \"" + "\", \"".join(fields[0:-1]) + f"\", and \"{fields[-1]}\""
 
         # Add necessary fields
-        fn = self.ui_new_field_name_editor.text()
-        field_names_new: Dict[str, str] = {"pageviews": fn, "article": fn+" (URL)", "desc": fn + " (Description)"}
+        fn = self.ui_new_field_name_QLineEdit.text()
+        field_names_new: Dict[str, str] = {
+            "pageviews": fn, "article": fn+" (URL)", "desc": fn + " (Description)", "num_of_langs": fn + " (Languages)"}
         field_names_old: List[str] = self._get_fields()
         fields_added: List[str] = []
         fields_reused: List[str] = []
@@ -173,9 +183,6 @@ class AddFameDialog(QDialog):
             if not askUser(text,parent=self.parentWidget()):
                 return None
 
-        for field_added in fields_added:
-            _add_field(field_added)
-
         CONNECTIONS = 100               # Number of workers to use for the threads
         RATE = 100                      # Ratelimit of RATE per PER seconds
         PER = 1                         # Ratelimit of RATE per PER seconds
@@ -183,7 +190,7 @@ class AddFameDialog(QDialog):
         MAX_TITLES = 50                 # Maximum number of titles we can batch-get short desc for
 
         # Setup Progress Dialog
-        progress = QProgressDialog("Adding Wikipedia Pageviews...", "Stop", 0, len(self.nids)*2-len(self.nids)//-MAX_TITLES, self)
+        progress = QProgressDialog("Adding Wikifame Data...", "Stop", 0, len(self.nids)*3, self)
         progress.setWindowModality(Qt.WindowModal)
         progress.setMinimumDuration(0)
         progress.setMinimumSize(300,30)
@@ -198,62 +205,70 @@ class AddFameDialog(QDialog):
             tooltip_msg += "No new fields added."
         tooltip(tooltip_msg, parent=self.parentWidget(), period=5000)
 
-        # Popoulating the search phrases queue in prep for loop
-        sps: queue.Queue[wiki.Wikifame] = queue.Queue()
-        merge_string = self.ui_merge_string_editor.toPlainText()
+        # A bunch of queues
+        # Populating the search phrases queue in prep for loop
+        q_wfs_with_sp: queue.Queue[wiki.Wikifame] = queue.Queue()           # Queue before step 1
+        buf_with_pos_articles: queue.Queue[wiki.Wikifame] = queue.Queue() # Buffer between step 1 and 2
+        buf_for_pageviews: queue.Queue[wiki.Wikifame] = queue.Queue()     # Buffer between step 2 and 3
+        q_for_updating_notes: queue.Queue[wiki.Wikifame] = queue.Queue() # Queue after step 3, for adding a " | " to the URL after processing
+
+        wfs: List[wiki.Wikifame] = []
+
+        # Populating q_wfs_with_sp
+        merge_string = self.ui_merge_string_QPlainTextEdit.toPlainText()
         for nid in self.nids:
             search_phrase = self._merge_field_into_tag(merge_string,self.bmw.col.get_note(nid))
-            wf = wiki.Wikifame(self.bmw,nid,search_phrase=search_phrase)
-            wf.field_names["pageviews"] = field_names_new["pageviews"]
-            wf.field_names["article"] = field_names_new["article"]
-            wf.field_names["desc"] = field_names_new["desc"]
-            wf.project = "en.wikipedia.org"
-            sps.put(wf)
+            lang_code = self.ui_lang_code_QLineEdit.text()
+            keywords = self.ui_keywords_QLineEdit.text().split(",")
+            for i in range(len(keywords)):
+                keywords[i].strip()
+            wf = wiki.Wikifame(nid=nid,search_phrase=search_phrase,lang_code=lang_code,keywords=keywords)
+            q_wfs_with_sp.put(wf)
+            wfs.append(wf)
 
-        # A bunch of queues
-        buf_for_pageviews: queue.Queue[wiki.Wikifame] = queue.Queue()
-        q_for_desc: queue.Queue[wiki.Wikifame] = queue.Queue()
-        q_for_article_postfix: queue.Queue[wiki.Wikifame] = queue.Queue()
-        
         prog: int = 0                   # Progress for the progress bar
-        populated: int = 0              # The number of cards succesfully populated wih PVs
+        pageviews_gotten: int = 0              # The number of cards succesfully populated wih PVs
         http_errs: int = 0              # The number of http errors during the process
         no_arti_found_errs: int = 0     # The number of search phrases which resulted in 0 hits
         future_requests: Dict = {}      # A dictionary mapping each future to a (executor, List[Wikifame]) tuple
         
+        class ThrottledThreadPoolExecutor(concurrent.futures.ThreadPoolExecutor):
+            def __init__(
+                self,
+                max_workers: int = CONNECTIONS,
+                rate: int= RATE,
+                per: float = PER,
+                timeout: float = TIMEOUT,
+                max_titles: Optional[int] = None,
+                func = None,
+                q: queue.Queue = None,
+                )-> None:
+                
+                self.rate = rate
+                self.per = per
+                self.timeout = timeout
+                self.max_titles = max_titles
+                self.busy = 0
+                self.query_no = 0
+                self.search_times = [-2*PER]*RATE
+                self.max_workers = max_workers
+                self.func = func
+                self.q = q
+                super().__init__(max_workers=max_workers)
+
         # Multi-threaded query loop initialisation
-        exe_se = concurrent.futures.ThreadPoolExecutor(max_workers=CONNECTIONS)     # search
-        exe_pv = concurrent.futures.ThreadPoolExecutor(max_workers=CONNECTIONS)     # pageview
-        exe_desc = concurrent.futures.ThreadPoolExecutor(max_workers=CONNECTIONS)   # description
-
-        # Tracks the last RATE times the Wikipedia query API has been used
-        req_times: Dict[concurrent.futures.ThreadPoolExecutor, List[float]] = {
-            exe_se: [-2*PER] * RATE, exe_pv: [-2*PER] * RATE, exe_desc: [-2*PER] * RATE}
-
-        # Tracks the total number of queries made of each type
-        query_no: Dict[concurrent.futures.ThreadPoolExecutor, int] = {
-            exe_se: 0, exe_pv: 0, exe_desc: 0}
-
-        # Tracking the number of busy workers
-        busy_exe: Dict[concurrent.futures.ThreadPoolExecutor,int] = {
-            exe_se: 0, exe_pv: 0, exe_desc: 0}    
+        exe_mw = ThrottledThreadPoolExecutor(max_workers=CONNECTIONS, func=wiki.Wikifame.fill_possible_articles, q=q_wfs_with_sp)                 # mediawiki API
+        exe_wd = ThrottledThreadPoolExecutor(max_workers=CONNECTIONS, func=wiki.Wikifame.wikidata_on_possible_articles, q=buf_with_pos_articles)  # wikidata API
+        exe_wm = ThrottledThreadPoolExecutor(max_workers=CONNECTIONS, func=wiki.Wikifame.fill_pageviews, q=buf_for_pageviews)                     # wikimedia REST API
+        exes: List[ThrottledThreadPoolExecutor] = [exe_mw, exe_wd, exe_wm]
 
         # Multi-threaded query loop
-        #   Search phrase -> Possible Article URLs (MediaWiki API)
-        #   Possible Article URLs -> Short Descriptions -> Get "correct" URL and description (MediaWiki API)
-        #   Correct Article URL -> Pageview (REST API)
-        while future_requests or not sps.empty() or not buf_for_pageviews.empty() or not q_for_desc.empty():
+        #   Search phrase -> Possible Article URLs (MediaWiki API using fill_possible_articles)
+        #   Possible Article URLs -> Short Descriptions -> Get "correct" URL and description (MediaWiki API using wikidata_on_possible_articles)
+        #   Correct Article URL -> Pageview (REST API using fill_pageviews)
+        while future_requests or not q_wfs_with_sp.empty() or not buf_with_pos_articles.empty() or not buf_for_pageviews.empty():
             if progress.wasCanceled():
                 break
-
-            # IF (a) there are still search_phrases and (b) the search RATE searches ago was sent more than PER seconds ago and
-            # (c) there is a thread ready to receive work: THEN give that thread work.
-            while not sps.empty() and time.time() > req_times[exe_se][query_no[exe_se] % RATE] + PER * 1.01 and busy_exe[exe_se] < CONNECTIONS:
-                req_times[exe_se][query_no[exe_se] % RATE] = time.time()
-                query_no[exe_se] += 1
-                busy_exe[exe_se] += 1
-                sp = sps.get()
-                future_requests[exe_se.submit(wiki.Wikifame.search_up_article, sp, timeout=TIMEOUT)] = (exe_se, [sp])
 
             done, _ = concurrent.futures.wait(future_requests, timeout=0.01, return_when=concurrent.futures.FIRST_COMPLETED)
 
@@ -262,77 +277,132 @@ class AddFameDialog(QDialog):
                 er: bool = False
                 try:
                     res: Optional[Union[wiki.Wikifame, List[str], Exception]] = future.result()
-                except requests.HTTPError and wiki.Wikifame.NoArticlesFound as err:
-                    if isinstance(err,requests.HTTPError):
+                except Exception as err:
+                    if isinstance(err, requests.HTTPError):
                         http_errs += 1
-                    if isinstance(err,wiki.Wikifame.NoArticlesFound):
+                    elif isinstance(err, wiki.Wikifame.NoArticlesFound):
                         no_arti_found_errs += 1
-                    prog += 1
-                    progress.setValue(prog)
+                    elif err.args[0] == "ERROR: No Search Phrase":
+                        pass
+                    else:
+                        raise err
+                    if exe == exe_mw:
+                        prog += 2
+                    elif exe == exe_wd:
+                        prog += 1
                     er = True
-                exe_list_wfs: Tuple[concurrent.futures.ThreadPoolExecutor,List[wiki.Wikifame]] = future_requests[future]
+                exe_list_wfs: Tuple[ThrottledThreadPoolExecutor, List[wiki.Wikifame]] = future_requests[future]
                 (exe, list_wfs) = exe_list_wfs
-                busy_exe[exe] -= 1
+                exe.busy -= 1
 
                 if not er:
-                    if exe == exe_se:
+                    if exe == exe_mw:
+                        buf_with_pos_articles.put(res)
+                    elif exe == exe_wd:
                         buf_for_pageviews.put(res)
-                        q_for_desc.put(res)
-                        q_for_article_postfix.put(res)
-                    elif exe == exe_pv:
-                        populated += 1
-                    elif exe == exe_desc:
-                        for j in range(len(list_wfs)):
-                            list_wfs[j].set("desc",res[j])
+                        q_for_updating_notes.put(res)
+                        pageviews_gotten += 1
+                    elif exe == exe_wm:
+                        pass
+                        # for j in range(len(list_wfs)):
+                        #     list_wfs[j].set("desc",res[j])
                 prog += 1
                 progress.setValue(prog)
                 del future_requests[future]
-                
-            # Same as top paragraph of loop for actual pageviews
-            while not buf_for_pageviews.empty() and time.time() > req_times[exe_pv][query_no[exe_pv] % RATE] + PER * 1.01 and busy_exe[exe_pv] < CONNECTIONS:
-                req_times[exe_pv][query_no[exe_pv] % RATE] = time.time()
-                query_no[exe_pv] += 1
-                busy_exe[exe_pv] += 1
-                wf = buf_for_pageviews.get()
-                future_requests[exe_pv.submit(wiki.Wikifame.fill_pageviews,wf,timeout=TIMEOUT)] = (exe_pv, [wf])
 
-            # Same as top paragraph of loop for actual pageviews, but only activates when there are
-            # more than 50 articles ready to do in a batch, or when there are less but this is the 
-            # only thing left to do
-            def b1() -> bool: return MAX_TITLES < q_for_desc.qsize()
-            def b2() -> bool: return not future_requests and sps.empty() and buf_for_pageviews.empty()
-            while (b1() or b2()) and time.time() > req_times[exe_desc][query_no[exe_desc] % RATE] + PER * 1.01 and busy_exe[exe_desc] < CONNECTIONS:
-                req_times[exe_desc][query_no[exe_desc] % RATE] = time.time()
-                query_no[exe_desc] += 1
-                busy_exe[exe_desc] += 1
-                l = min(MAX_TITLES, q_for_desc.qsize())
-                list_for_desc: List[wiki.Wikifame] = []
-                desc_strs: List[str] = []
-                for j in range(l):
-                    wff = q_for_desc.get()
-                    arti = wff.fields["article"]
-                    if arti is not None:
-                        list_for_desc.append(wff)
-                        desc_strs.append(arti)
-                future_requests[exe_desc.submit(wiki.get_desc,desc_strs,timeout=TIMEOUT)] = (exe_desc, list_for_desc)
+            for exe in exes:
+                # IF (a) there are still search_phrases and (b) the search RATE searches ago was sent more than PER seconds ago and
+                # (c) there is a thread ready to receive work: THEN give that thread work.
+                while not exe.q.empty() and time.time() > exe.search_times[exe.query_no % exe.rate] + exe.per * 1.01 and exe.busy < exe.max_workers:
+                    exe.search_times[exe.query_no % exe.rate] = time.time()
+                    exe.query_no += 1
+                    exe.busy += 1
+                    wf = exe.q.get()
+                    future_requests[exe.submit(exe.func, wf, timeout=exe.timeout)] = (exe, [wf])
+
+            # # IF (a) there are still search_phrases and (b) the search RATE searches ago was sent more than PER seconds ago and
+            # # (c) there is a thread ready to receive work: THEN give that thread work.
+            # while not wfs_with_sp.empty() and time.time() > exe_mw.search_times[exe_mw.query_no % exe_mw.rate] + exe_mw.per * 1.01 and exe_mw.busy < exe_mw.max_workers:
+            #     exe_mw.search_times[exe_mw.query_no % exe_mw.rate] = time.time()
+            #     exe_mw.query_no += 1
+            #     exe_mw.busy += 1
+            #     wf_with_sp = wfs_with_sp.get()
+            #     future_requests[exe_mw.submit(wiki.Wikifame.fill_possible_articles, wf_with_sp, timeout=exe_mw.timeout)] = (exe_mw, [wf_with_sp])
+                
+            # # Same as above paragraph for article resolution
+            # while not buf_with_pos_articles.empty() and time.time() > exe_wd.search_times[exe_wd.query_no % exe_wd.rate] + exe_wd.per * 1.01 and exe_wd.busy < exe_wd.max_workers:
+            #     exe_wd.search_times[exe_wd.query_no % exe_wd.rate] = time.time()
+            #     exe_wd.query_no += 1
+            #     exe_wd.busy += 1
+            #     wf = buf_with_pos_articles.get()
+            #     future_requests[exe_wd.submit(wiki.Wikifame.fill_pageviews,wf,timeout=exe_wd.timeout)] = (exe_wd, [wf])
+
+            # # Same as top paragraph of loop for actual pageviews, but only activates when there are
+            # # more than 50 articles ready to do in a batch, or when there are less but this is the 
+            # # only thing left to do
+            # def b1() -> bool: return MAX_TITLES < q_for_desc.qsize()
+            # def b2() -> bool: return not future_requests and wfs_with_sp.empty() and buf_with_pos_articles.empty()
+            # while (b1() or b2()) and time.time() > exe_wm.search_times[exe_wm.query_no % exe_wm.rate] + exe_wm.per * 1.01 and exe_wm.busy < exe_wm.max_workers:
+            #     exe_wm.search_times[exe_wm.query_no % exe_wm.rate] = time.time()
+            #     exe_wm.query_no += 1
+            #     exe_wm.busy += 1
+            #     l = min(MAX_TITLES, q_for_desc.qsize())
+            #     list_for_desc: List[wiki.Wikifame] = []
+            #     desc_strs: List[str] = []
+            #     for j in range(l):
+            #         wff = q_for_desc.get()
+            #         arti = wff.fields["article"]
+            #         if arti is not None:
+            #             list_for_desc.append(wff)
+            #             desc_strs.append(arti)
+            #     future_requests[exe_wm.submit(wiki.get_desc,desc_strs,timeout=TIMEOUT)] = (exe_wm, list_for_desc)
 
         # Multi-threaded query loop clean-up
-        exe_se.shutdown(wait = False, cancel_futures = True)
-        exe_pv.shutdown(wait = False, cancel_futures = True)
-        exe_desc.shutdown(wait = False, cancel_futures = True)
+        for exe in exes:
+            exe.shutdown(wait = False, cancel_futures = True)
+
+        # exe_mw.shutdown(wait = False, cancel_futures = True)
+        # exe_wd.shutdown(wait = False, cancel_futures = True)
+        # exe_wm.shutdown(wait = False, cancel_futures = True)
+
+        for field_added in fields_added:
+            _add_field(field_added)
         
         # This may be needed when many articles cannot be found (so the total number of batch
         # desc queries reduces dramatically)
         progress.setValue(progress.maximum())
 
-        msg = "Added Pageview data for {} out of {} selected notes. {} search phrases not found.  {} errors".format(
-            populated,len(self.nids),no_arti_found_errs,http_errs)
+        msg = "Added Pageview data for {} out of {} selected notes.  {} search phrases not found.  {} errors. ".format(
+            pageviews_gotten,len(self.nids),no_arti_found_errs,http_errs)
+        msg += "\n\nAny notes without a pageview or number of languages count are tagged with \"Wiki_Warning\"."
         showInfo(msg, textFormat="rich", parent=self)
 
         # Adding a pipe to each article, in prep for manual fixing phase
-        while not q_for_article_postfix.empty():
-            wf = q_for_article_postfix.get()
-            wf.set("article",wf.note[wf.field_names["article"]]+" | ")
+        while not q_for_updating_notes.empty():
+            wf = q_for_updating_notes.get()
+            print(f"Doing {wf.article}")
+            note = self.bmw.col.get_note(wf.nid)
+            note[field_names_new["pageviews"]] = str(wf.pageviews)
+            note[field_names_new["article"]] = wf.article+" | "
+            note[field_names_new["desc"]] = wf.desc
+            note[field_names_new["num_of_langs"]] = str(wf.num_of_langs)
+            print(wf.nid)
+            self.bmw.col.update_note(note)
+
+        for wf in wfs:
+            print(f"Checking {self.nid} for warnings...")
+            if wf.warning:
+                print("WARNING: Wiki Warning")
+                note = self.bmw.col.get_note(wf.nid)
+                note.add_tag("Wiki_Warning")
+                self.bmw.col.update_note(note)
+
+        print("DONE")
+
+        #     note.flush()
+        #     qq.append(note)
+
+        # self.bmw.col.update_notes(qq)
 
         self.close()
 
@@ -347,16 +417,16 @@ class AddFameDialog(QDialog):
             """
 
             if ui_merge_tag_selector.currentIndex() != 0:
-                self.ui_merge_string_editor.insertPlainText("{{"+ui_merge_tag_selector.currentText()+"}}")
+                self.ui_merge_string_QPlainTextEdit.insertPlainText("{{"+ui_merge_tag_selector.currentText()+"}}")
                 ui_merge_tag_selector.setCurrentIndex(0)
-            self.ui_merge_string_editor.setFocus()
+            self.ui_merge_string_QPlainTextEdit.setFocus()
 
         def _update_merged_string_example() -> None:
             """
             Generate and update the "Example" string under the textbox by merging with merge tags.
             """
 
-            merge_string = self.ui_merge_string_editor.toPlainText()
+            merge_string = self.ui_merge_string_QPlainTextEdit.toPlainText()
             note = mw.col.get_note(self.nid)
             msg = "<b>Example:</b> " + self._merge_field_into_tag(merge_string, note)
             ui_merge_string_example.setTextFormat(Qt.RichText)
@@ -383,22 +453,25 @@ class AddFameDialog(QDialog):
                         ui_merge_tag_selector.addItems(["SELECT FIELD"] + self.fields)
                         ui_merge_tag_selector.currentIndexChanged.connect(_insert_merge_tag)
                     ui_merge_tag_selector_form.addRow(QLabel("Insert field:"), ui_merge_tag_selector)
-                    self.ui_merge_string_editor = QPlainTextEdit()
-                    self.ui_merge_string_editor.textChanged.connect(_update_merged_string_example)
+                    self.ui_merge_string_QPlainTextEdit = QPlainTextEdit()
+                    self.ui_merge_string_QPlainTextEdit.textChanged.connect(_update_merged_string_example)
                     ui_merge_string_example = QLabel("<b>Example:</b> ")
                     ui_merge_string_example.setWordWrap(True)
                 ui_gbvbox.addLayout(ui_merge_tag_selector_form)
-                ui_gbvbox.addWidget(self.ui_merge_string_editor)
+                ui_gbvbox.addWidget(self.ui_merge_string_QPlainTextEdit)
                 ui_gbvbox.addWidget(ui_merge_string_example)
             ui_gbox.setLayout(ui_gbvbox)
 
             ui_misc_form = QFormLayout()
             if True:
-                self.keyword_editor = QLineEdit()
-                self.ui_new_field_name_editor = QLineEdit()
-                self.ui_new_field_name_editor.setText("Wiki Pageviews")
-            ui_misc_form.addRow(QLabel("Keywords (comma separated):"), self.keyword_editor)
-            ui_misc_form.addRow(QLabel("Add Fame into Field:"), self.ui_new_field_name_editor)
+                self.ui_lang_code_QLineEdit = QLineEdit()
+                self.ui_lang_code_QLineEdit.setText("en")
+                self.ui_keywords_QLineEdit = QLineEdit()
+                self.ui_new_field_name_QLineEdit = QLineEdit()
+                self.ui_new_field_name_QLineEdit.setText("Wiki Pageviews")
+            ui_misc_form.addRow(QLabel("Keywords (comma separated):"), self.ui_keywords_QLineEdit)
+            ui_misc_form.addRow(QLabel("Language Code:"), self.ui_lang_code_QLineEdit)
+            ui_misc_form.addRow(QLabel("Add Fame into Field:"), self.ui_new_field_name_QLineEdit)
 
             ui_button_box = QDialogButtonBox(Qt.Horizontal, self)
             if True:
@@ -416,7 +489,7 @@ class AddFameDialog(QDialog):
         ui_main_vbox.addWidget(ui_button_box)
 
         self.setLayout(ui_main_vbox)
-        self.ui_merge_string_editor.setFocus()
+        self.ui_merge_string_QPlainTextEdit.setFocus()
         self.setMinimumWidth(540)
         self.setMinimumHeight(330)
         self.resize(540,300)
