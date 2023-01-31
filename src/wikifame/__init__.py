@@ -77,15 +77,6 @@ class AddFameDialog(QDialog):
         merge_result += merge_string
         return merge_result
 
-    def _get_fields(self) -> List[str]:
-        """
-        Returns a list of field names for the model that the notes are based on.
-
-        :return: A list of field names for the notes' model
-        """
-
-        return self.bmw.col.models.field_names(self.model)
-
     # See https://github.com/ankitects/anki/blob/d110c4916cf1d83fbeae48ae891515c79a412018/qt/aqt/fields.py#L142
     def _unique_name(self, txt: str, ignoreOrd: Optional[int] = None) -> Optional[str]:
         """
@@ -168,7 +159,7 @@ class AddFameDialog(QDialog):
         fn = self.ui_new_field_name_QLineEdit.text()
         field_names_new: Dict[str, str] = {
             "pageviews": fn, "article": fn+" (URL)", "desc": fn + " (Description)", "num_of_langs": fn + " (Languages)"}
-        field_names_old: List[str] = self._get_fields()
+        field_names_old: List[str] = self.fields
         fields_added: List[str] = []
         fields_reused: List[str] = []
         for code in field_names_new:
@@ -516,15 +507,15 @@ def setup_menu(browser : QMainWindow) -> None:
     menu = browser.form.menu_Notes
     menu.addSeparator()
 
-    # Setup a new menu item, "Add Fame..."
-    add_fameAction = QAction("Add Fame...", mw)
-    menu.addAction(add_fameAction)
-    qconnect(add_fameAction.triggered, lambda: add_fame(browser))
+    # Set up a new menu item, "Add Fame..."
+    add_fame_action = QAction("Add Fame...", mw)
+    menu.addAction(add_fame_action)
+    qconnect(add_fame_action.triggered, lambda: add_fame(browser))
 
-    # Setup a new menu item, "Order Notes..."
-    add_fameAction = QAction("Order Notes by...", mw)
-    menu.addAction(add_fameAction)
-    qconnect(add_fameAction.triggered, lambda: order_notes(browser))
+    # Set up a new menu item, "Order Notes..."
+    add_fame_action = QAction("Order Notes by...", mw)
+    menu.addAction(add_fame_action)
+    qconnect(add_fame_action.triggered, lambda: order_notes(browser))
 
 gui_hooks.browser_menus_did_init.append(setup_menu)
 
