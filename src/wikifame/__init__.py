@@ -1,4 +1,3 @@
-from math import ceil
 from aqt import mw, gui_hooks, AnkiQt
 from aqt.utils import qconnect, tooltip, showWarning, showInfo
 from aqt.qt import *
