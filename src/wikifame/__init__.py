@@ -482,7 +482,7 @@ class AddFameDialog(QDialog):
         self.ui_merge_string_QPlainTextEdit.setFocus()
         self.setMinimumWidth(540)
         self.setMinimumHeight(330)
-        self.resize(540,300)
+        self.resize(540,330)
         self.setWindowTitle("Add Fame...")
 
 
@@ -494,15 +494,6 @@ def add_fame(browser) -> None:
     dialog = AddFameDialog(browser, nids)
     dialog.exec_()
 
-def order_notes(browser) -> None:
-    nids = browser.selectedNotes()
-    if not nids:
-        tooltip("No cards selected.")
-        return
-    tooltip("Selected! (To be developed)")
-    # dialog = AddFameDialog(browser, nids)
-    # dialog.exec_()
-
 def setup_menu(browser : QMainWindow) -> None:
     menu = browser.form.menu_Notes
     menu.addSeparator()
@@ -511,11 +502,6 @@ def setup_menu(browser : QMainWindow) -> None:
     add_fame_action = QAction("Add Fame...", mw)
     menu.addAction(add_fame_action)
     qconnect(add_fame_action.triggered, lambda: add_fame(browser))
-
-    # Set up a new menu item, "Order Notes..."
-    add_fame_action = QAction("Order Notes by...", mw)
-    menu.addAction(add_fame_action)
-    qconnect(add_fame_action.triggered, lambda: order_notes(browser))
 
 gui_hooks.browser_menus_did_init.append(setup_menu)
 
